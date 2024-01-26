@@ -7,6 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 from diffusers import DiffusionPipeline
+from diffusers.loaders import LoraLoaderMixin
 from diffusers.utils import BaseOutput
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -23,7 +24,7 @@ class EmuVisualGenerationPipelineOutput(BaseOutput):
     nsfw_content_detected: Optional[bool]
 
 
-class EmuRL:
+class EmuRL(LoraLoaderMixin):
     _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds"]
 
     def __init__(self, path, torch_dtype=torch.bfloat16, variant="bf16", use_safetensors=True) -> None:
