@@ -19,7 +19,7 @@ class DDPOConfig:
     """the name of this experiment (by default is the file name without the extension name)"""
     run_name: Optional[str] = ""
     """Run name for wandb logging and checkpoint saving."""
-    seed: int = 0
+    seed: int = 42
     """Seed value for random generations"""
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
