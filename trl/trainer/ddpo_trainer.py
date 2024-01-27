@@ -263,7 +263,8 @@ class DDPOTrainer(BaseTrainer):
             image_data.extend([rewards[i], rewards_metadata[i]])
 
         if self.image_samples_callback is not None:
-            self.image_samples_callback(prompt_image_data, global_step, self.accelerator.trackers[0])
+            if self.accelerator.is_main_process:
+                self.image_samples_callback(prompt_image_data, global_step, self.accelerator.trackers[0])
 
         rewards = torch.cat(rewards)
         rewards = self.accelerator.gather(rewards).cpu().numpy()

@@ -30,7 +30,7 @@ from trl.import_utils import is_npu_available, is_xpu_available
 
 @dataclass
 class ScriptArguments:
-    hf_user_access_token: str
+    # hf_user_access_token: str
     pretrained_model: str = "runwayml/stable-diffusion-v1-5"
     """the pretrained model to use"""
     pretrained_revision: str = "main"
@@ -208,4 +208,4 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    trainer.push_to_hub(args.hf_hub_model_id, token=args.hf_user_access_token)
+    # trainer.push_to_hub(args.hf_hub_model_id, token=args.hf_user_access_token)
