@@ -13,4 +13,4 @@ accelerate launch --config_file $ACCELERATE_CONFIG --num_processes=$NUM_GPUS exa
         --per_prompt_stat_tracking_buffer_size=32 \
         --mixed_precision="bf16" \
         --tracker_project_name="ddpo_sd_aesthetic_score" \
-        --log_with="wandb":
+        --log_with="wandb" \
