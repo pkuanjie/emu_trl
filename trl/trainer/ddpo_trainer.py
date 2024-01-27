@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from datetime import datetime
 import warnings
 from collections import defaultdict
 from concurrent import futures
@@ -51,6 +52,9 @@ This is a diffusion model that has been fine-tuned with reinforcement learning t
 
 """
 
+def log_with_time(message):
+    c = datetime.now()
+    print(f"time: {c} | {message}")
 
 class DDPOTrainer(BaseTrainer):
     """
@@ -248,26 +252,36 @@ class DDPOTrainer(BaseTrainer):
             global_step (int): The updated global step.
 
         """
+        log_with_time('start a new step')
         samples, prompt_image_data = self._generate_samples(
             iterations=self.config.sample_num_batches_per_epoch,
             batch_size=self.config.sample_batch_size,
         )
+        log_with_time('finish sample')
 
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
         rewards, rewards_metadata = self.compute_rewards(
             prompt_image_data, is_async=self.config.async_reward_computation
         )
+        log_with_time('finish reward compute')
 
         for i, image_data in enumerate(prompt_image_data):
             image_data.extend([rewards[i], rewards_metadata[i]])
 
+        log_with_time('finish reward extend')
+
         if self.image_samples_callback is not None:
             if self.accelerator.is_main_process:
                 self.image_samples_callback(prompt_image_data, global_step, self.accelerator.trackers[0])
+        log_with_time('finish reward callback')
 
         rewards = torch.cat(rewards)
+        print(rewards)
+        print(rewards.shape)
+        self.accelerator.wait_for_everyone()
         rewards = self.accelerator.gather(rewards).cpu().numpy()
+        log_with_time('finish reward gather')
 
         self.accelerator.log(
             {
@@ -278,6 +292,7 @@ class DDPOTrainer(BaseTrainer):
             },
             step=global_step,
         )
+        log_with_time('start advantages')
 
         if self.config.per_prompt_stat_tracking:
             # gather the prompts across processes
@@ -286,6 +301,7 @@ class DDPOTrainer(BaseTrainer):
             advantages = self.stat_tracker.update(prompts, rewards)
         else:
             advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        log_with_time('end advanteges')
 
         # ungather advantages;  keep the entries corresponding to the samples on this process
         samples["advantages"] = (
@@ -299,6 +315,7 @@ class DDPOTrainer(BaseTrainer):
         total_batch_size, num_timesteps = samples["timesteps"].shape
 
         for inner_epoch in range(self.config.train_num_inner_epochs):
+            log_with_time('start inner epoch')
             # shuffle samples along batch dimension
             perm = torch.randperm(total_batch_size, device=self.accelerator.device)
             samples = {k: v[perm] for k, v in samples.items()}
@@ -325,16 +342,22 @@ class DDPOTrainer(BaseTrainer):
             # Create new dictionaries for each row of transposed values
             samples_batched = [dict(zip(original_keys, row_values)) for row_values in transposed_values]
 
+            log_with_time('start train step')
             self.sd_pipeline.unet.train()
             global_step = self._train_batched_samples(inner_epoch, epoch, global_step, samples_batched)
+            log_with_time('end train step')
             # ensure optimization step at the end of the inner epoch
             if not self.accelerator.sync_gradients:
                 raise ValueError(
                     "Optimization step should have been performed by this point. Please check calculated gradient accumulation settings."
                 )
+            log_with_time('end sync gradient')
+            print("============================")
 
-        if epoch != 0 and epoch % self.config.save_freq == 0 and self.accelerator.is_main_process:
+        if epoch != 0 and epoch % self.config.save_freq == 0:
+            log_with_time('start save state')
             self.accelerator.save_state()
+            log_with_time('end save state')
 
         return global_step
 
@@ -602,6 +625,8 @@ class DDPOTrainer(BaseTrainer):
         if epochs is None:
             epochs = self.config.num_epochs
         for epoch in range(self.first_epoch, epochs):
+            if self.accelerator.is_main_process:
+                print(f"Epoch {epoch} | Global Step: {global_step}")
             global_step = self.step(epoch, global_step)
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL DDPO Model") -> None:
