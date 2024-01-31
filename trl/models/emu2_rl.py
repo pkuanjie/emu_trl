@@ -53,6 +53,7 @@ class EmuRL(LoraLoaderMixin):
             multimodal_encoder=self.multimodal_encoder,
             tokenizer=self.tokenizer,
         )
+        print('--- emu2 loading finished ---')
 
         # link all modules of the emu model to this class. This class becomes a puppet of emu with added functioins for RL
         # this transformation is to make the emu model more suitable for RL training (with trl) but keep its original model and class intact
@@ -66,7 +67,6 @@ class EmuRL(LoraLoaderMixin):
         self.vae_scale_factor = self.emu_pipeline.vae_scale_factor
         self.transform = self.emu_pipeline.transform
         self.negative_prompt = self.emu_pipeline.negative_prompt
-        self.image_processor = self.emu_pipeline.image_processor
 
     def device(self, module=None):
         if module is None:
@@ -428,3 +428,4 @@ class EmuRL(LoraLoaderMixin):
         else:
             has_nsfw_concept = None
         return image, has_nsfw_concept
+

@@ -594,7 +594,7 @@ class DefaultDDPOEmuPipeline(DDPOEmuPipeline):
         self.emu_pipeline.save_pretrained(output_dir)
 
     def set_progress_bar_config(self, *args, **kwargs):
-        self.emu_pipeline.set_progress_bar_config(*args, **kwargs)
+        self.emu_pipeline.emu_pipeline.set_progress_bar_config(*args, **kwargs)
 
     def get_trainable_layers(self):
         if self.use_lora:
