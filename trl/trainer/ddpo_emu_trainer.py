@@ -144,14 +144,6 @@ class DDPOEmuTrainer(BaseTrainer):
 
         self.sd_pipeline = sd_pipeline
 
-        self.sd_pipeline.set_progress_bar_config(
-            position=1,
-            disable=not self.accelerator.is_local_main_process,
-            leave=False,
-            desc="Timestep",
-            dynamic_ncols=True,
-        )
-
         # For mixed precision training we cast all non-trainable weights (vae, non-lora multimodal_encoder and non-lora unet) to half-precision
         # as these weights are only used for inference, keeping weights in full precision is not required.
         if self.accelerator.mixed_precision == "fp16":
@@ -189,7 +181,7 @@ class DDPOEmuTrainer(BaseTrainer):
         #         max_length=self.sd_pipeline.tokenizer.model_max_length,
         #     ).input_ids.to(self.accelerator.device)
         # )[0]
-        self.neg_prompt_embed = self.sd_pipeline.multimodal_encoder.generate_image(text=[""] if self.config.negative_prompts is None else self.config.negative_prompts)
+        self.neg_prompt_embed = self.sd_pipeline.emu_pipeline._get_negative_prompt_embedding("")
 
         if config.per_prompt_stat_tracking:
             self.stat_tracker = PerPromptStatTracker(
@@ -473,12 +465,11 @@ class DDPOEmuTrainer(BaseTrainer):
 
             prompt_ids = self.sd_pipeline.tokenizer(
                 prompts,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=self.sd_pipeline.tokenizer.model_max_length,
+                padding="longest", 
+                return_tensors="pt"
             ).input_ids.to(self.accelerator.device)
-            prompt_embeds = self.sd_pipeline.multimodal_encoder(prompt_ids)[0]
+            prompt_embeds = self.sd_pipeline.multimodal_encoder.generate_image(prompts, tokenizer=self.sd_pipeline.tokenizer)
+            print(prompt_embeds.shape)
 
             with self.autocast():
                 sd_output = self.sd_pipeline(

@@ -17,6 +17,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -123,11 +124,6 @@ class DDPOEmuPipeline(object):
         """
         raise NotImplementedError
 
-    def set_progress_bar_config(self, *args, **kwargs):
-        """
-        Sets the progress bar config for the pipeline
-        """
-        raise NotImplementedError
 
     def save_pretrained(self, *args, **kwargs):
         """
@@ -439,15 +435,21 @@ def pipeline_step(
     # 3. Encode input prompt
     text_encoder_lora_scale = cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
     prompt_embeds = self._encode_prompt(
-        prompt,
         device,
         num_images_per_prompt,
         do_classifier_free_guidance,
-        negative_prompt,
         prompt_embeds=prompt_embeds,
         negative_prompt_embeds=negative_prompt_embeds,
         lora_scale=text_encoder_lora_scale,
     )
+
+    unet_added_conditions = {}
+    time_ids = torch.LongTensor(original_size + crop_info + [height, width]).to(device)
+    if do_classifier_free_guidance:
+	unet_added_conditions["time_ids"] = torch.cat([time_ids, time_ids], dim=0)
+    else:
+	unet_added_conditions["time_ids"] = time_ids
+    unet_added_conditions["text_embeds"] = torch.mean(prompt_embeds, dim=1)
 
     # 4. Prepare timesteps
     self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -470,43 +472,41 @@ def pipeline_step(
     num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
     all_latents = [latents]
     all_log_probs = []
-    with self.progress_bar(total=num_inference_steps) as progress_bar:
-        for i, t in enumerate(timesteps):
-            # expand the latents if we are doing classifier free guidance
-            latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+    for i, t in enumerate(timesteps):
+        # expand the latents if we are doing classifier free guidance
+        latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+        latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-            # predict the noise residual
-            noise_pred = self.unet(
-                latent_model_input,
-                t,
-                encoder_hidden_states=prompt_embeds,
-                cross_attention_kwargs=cross_attention_kwargs,
-                return_dict=False,
-            )[0]
+        # predict the noise residual
+	noise_pred = self.unet(
+	    latent_model_input,
+	    t,
+	    encoder_hidden_states=prompt_embeds,
+	    added_cond_kwargs=unet_added_conditions,
+            cross_attention_kwargs=cross_attention_kwargs,
+	).sample
 
-            # perform guidance
-            if do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+        # perform guidance
+        if do_classifier_free_guidance:
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            if do_classifier_free_guidance and guidance_rescale > 0.0:
-                # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+        if do_classifier_free_guidance and guidance_rescale > 0.0:
+            # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+            noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
-            # compute the previous noisy sample x_t -> x_t-1
-            scheduler_output = scheduler_step(self.scheduler, noise_pred, t, latents, eta)
-            latents = scheduler_output.latents
-            log_prob = scheduler_output.log_probs
+        # compute the previous noisy sample x_t -> x_t-1
+        scheduler_output = scheduler_step(self.scheduler, noise_pred, t, latents, eta)
+        latents = scheduler_output.latents
+        log_prob = scheduler_output.log_probs
 
-            all_latents.append(latents)
-            all_log_probs.append(log_prob)
+        all_latents.append(latents)
+        all_log_probs.append(log_prob)
 
-            # call the callback, if provided
-            if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                progress_bar.update()
-                if callback is not None and i % callback_steps == 0:
-                    callback(i, t, latents)
+        # call the callback, if provided
+        if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+            if callback is not None and i % callback_steps == 0:
+                callback(i, t, latents)
 
     if not output_type == "latent":
         image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
@@ -592,9 +592,6 @@ class DefaultDDPOEmuPipeline(DDPOEmuPipeline):
             state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.emu_pipeline.unet))
             self.emu_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
         self.emu_pipeline.save_pretrained(output_dir)
-
-    def set_progress_bar_config(self, *args, **kwargs):
-        self.emu_pipeline.emu_pipeline.set_progress_bar_config(*args, **kwargs)
 
     def get_trainable_layers(self):
         if self.use_lora:
