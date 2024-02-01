@@ -52,9 +52,11 @@ This is a diffusion model that has been fine-tuned with reinforcement learning t
 
 """
 
+
 def log_with_time(message):
     c = datetime.now()
     print(f"time: {c} | {message}")
+
 
 class DDPOEmuTrainer(BaseTrainer):
     """
@@ -260,7 +262,6 @@ class DDPOEmuTrainer(BaseTrainer):
         for i, image_data in enumerate(prompt_image_data):
             image_data.extend([rewards[i], rewards_metadata[i]])
 
-
         if self.image_samples_callback is not None:
             if self.accelerator.is_main_process:
                 self.image_samples_callback(prompt_image_data, global_step, self.accelerator.trackers[0])
@@ -365,7 +366,7 @@ class DDPOEmuTrainer(BaseTrainer):
                 noise_pred = self.sd_pipeline.unet(
                     torch.cat([latents] * 2),
                     torch.cat([timesteps] * 2),
-                    embeds,
+                    encoder_hidden_states=embeds,
                 ).sample
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + self.config.sample_guidance_scale * (
@@ -375,7 +376,7 @@ class DDPOEmuTrainer(BaseTrainer):
                 noise_pred = self.sd_pipeline.unet(
                     latents,
                     timesteps,
-                    embeds,
+                    encoder_hidden_states=embeds,
                 ).sample
             # compute the log prob of next_latents given latents under the current model
 
@@ -463,13 +464,12 @@ class DDPOEmuTrainer(BaseTrainer):
         for _ in range(iterations):
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
 
-            prompt_ids = self.sd_pipeline.tokenizer(
-                prompts,
-                padding="longest", 
-                return_tensors="pt"
-            ).input_ids.to(self.accelerator.device)
-            prompt_embeds = self.sd_pipeline.multimodal_encoder.generate_image(prompts, tokenizer=self.sd_pipeline.tokenizer)
-            print(prompt_embeds.shape)
+            prompt_ids = self.sd_pipeline.tokenizer(prompts, padding="longest", return_tensors="pt").input_ids.to(
+                self.accelerator.device
+            )
+            prompt_embeds = self.sd_pipeline.multimodal_encoder.generate_image(
+                prompts, tokenizer=self.sd_pipeline.tokenizer
+            )
 
             with self.autocast():
                 sd_output = self.sd_pipeline(

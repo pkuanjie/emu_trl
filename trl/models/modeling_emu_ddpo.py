@@ -124,7 +124,6 @@ class DDPOEmuPipeline(object):
         """
         raise NotImplementedError
 
-
     def save_pretrained(self, *args, **kwargs):
         """
         Saves all of the model weights
@@ -322,10 +321,12 @@ def scheduler_step(
 def pipeline_step(
     self,
     prompt: Optional[Union[str, List[str]]] = None,
-    height: Optional[int] = None,
-    width: Optional[int] = None,
+    height: int = 1024,
+    width: int = 1024,
     num_inference_steps: int = 50,
-    guidance_scale: float = 7.5,
+    guidance_scale: float = 3.0,
+    crop_info: List[int] = [0, 0],
+    original_size: List[int] = [1024, 1024],
     negative_prompt: Optional[Union[str, List[str]]] = None,
     num_images_per_prompt: Optional[int] = 1,
     eta: float = 0.0,
@@ -427,6 +428,8 @@ def pipeline_step(
         batch_size = prompt_embeds.shape[0]
 
     device = self._execution_device
+    dtype = self.dtype(self.unet)
+
     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
     # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
     # corresponds to doing no classifier free guidance.
@@ -434,7 +437,7 @@ def pipeline_step(
 
     # 3. Encode input prompt
     text_encoder_lora_scale = cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
-    prompt_embeds = self._encode_prompt(
+    prompt_embeds = self._prepare_prompt_embed(
         device,
         num_images_per_prompt,
         do_classifier_free_guidance,
@@ -446,27 +449,24 @@ def pipeline_step(
     unet_added_conditions = {}
     time_ids = torch.LongTensor(original_size + crop_info + [height, width]).to(device)
     if do_classifier_free_guidance:
-	unet_added_conditions["time_ids"] = torch.cat([time_ids, time_ids], dim=0)
+        unet_added_conditions["time_ids"] = torch.cat([time_ids, time_ids], dim=0)
     else:
-	unet_added_conditions["time_ids"] = time_ids
-    unet_added_conditions["text_embeds"] = torch.mean(prompt_embeds, dim=1)
+        unet_added_conditions["time_ids"] = time_ids
+        unet_added_conditions["text_embeds"] = torch.mean(prompt_embeds, dim=1)
 
     # 4. Prepare timesteps
     self.scheduler.set_timesteps(num_inference_steps, device=device)
     timesteps = self.scheduler.timesteps
 
     # 5. Prepare latent variables
-    num_channels_latents = self.unet.config.in_channels
-    latents = self.prepare_latents(
-        batch_size * num_images_per_prompt,
-        num_channels_latents,
-        height,
-        width,
-        prompt_embeds.dtype,
-        device,
-        generator,
-        latents,
+    shape = (
+        batch_size,
+        self.unet.config.in_channels,
+        height // self.vae_scale_factor,
+        width // self.vae_scale_factor,
     )
+    latents = torch.randn(shape, device=device, dtype=dtype)
+    latents = latents * self.scheduler.init_noise_sigma
 
     # 6. Denoising loop
     num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -478,13 +478,13 @@ def pipeline_step(
         latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
         # predict the noise residual
-	noise_pred = self.unet(
-	    latent_model_input,
-	    t,
-	    encoder_hidden_states=prompt_embeds,
-	    added_cond_kwargs=unet_added_conditions,
+        noise_pred = self.unet(
+            latent_model_input,
+            t,
+            encoder_hidden_states=prompt_embeds,
+            added_cond_kwargs=unet_added_conditions,
             cross_attention_kwargs=cross_attention_kwargs,
-	).sample
+        ).sample
 
         # perform guidance
         if do_classifier_free_guidance:

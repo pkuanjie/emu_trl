@@ -7,8 +7,16 @@ import numpy as np
 from tqdm import tqdm
 
 from diffusers import DiffusionPipeline
-from diffusers.loaders import LoraLoaderMixin
-from diffusers.utils import BaseOutput
+from diffusers.loaders import FromSingleFileMixin, IPAdapterMixin, LoraLoaderMixin, TextualInversionLoaderMixin
+from diffusers.utils import (
+    BaseOutput,
+    USE_PEFT_BACKEND,
+    deprecate,
+    logging,
+    replace_example_docstring,
+    scale_lora_layers,
+    unscale_lora_layers,
+)
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -18,13 +26,27 @@ OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 DEFAULT_IMG_PLACEHOLDER = "[<IMG_PLH>]"
 
 
+def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
+    """
+    Rescale `noise_cfg` according to `guidance_rescale`. Based on findings of [Common Diffusion Noise Schedules and
+    Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf). See Section 3.4
+    """
+    std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
+    std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
+    # rescale the results from guidance (fixes overexposure)
+    noise_pred_rescaled = noise_cfg * (std_text / std_cfg)
+    # mix with the original results from guidance by factor guidance_rescale to avoid "plain looking" images
+    noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
+    return noise_cfg
+
+
 @dataclass
 class EmuVisualGenerationPipelineOutput(BaseOutput):
     image: Image.Image
     nsfw_content_detected: Optional[bool]
 
 
-class EmuRL(LoraLoaderMixin):
+class EmuRL(LoraLoaderMixin, DiffusionPipeline, TextualInversionLoaderMixin, IPAdapterMixin, FromSingleFileMixin):
     _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds"]
 
     def __init__(self, path, torch_dtype=torch.bfloat16, variant="bf16", use_safetensors=True) -> None:
@@ -36,24 +58,24 @@ class EmuRL(LoraLoaderMixin):
 
         # load the emu model from the huggingface checkpoint
         self.multimodal_encoder = AutoModelForCausalLM.from_pretrained(
-                f"{self.path}/multimodal_encoder",
-                trust_remote_code=True,
-                torch_dtype=self.torch_dtype,
-                use_safetensors=self.use_safetensors,
-                variant=self.variant,
-                )
+            f"{self.path}/multimodal_encoder",
+            trust_remote_code=True,
+            torch_dtype=self.torch_dtype,
+            use_safetensors=self.use_safetensors,
+            variant=self.variant,
+        )
         self.tokenizer = AutoTokenizer.from_pretrained(f"{self.path}/tokenizer")
 
         self.emu_pipeline = DiffusionPipeline.from_pretrained(
-                self.path,
-                custom_pipeline="pipeline_emu2_gen",
-                torch_dtype=self.torch_dtype,
-                use_safetensors=self.use_safetensors,
-                variant=self.variant,
-                multimodal_encoder=self.multimodal_encoder,
-                tokenizer=self.tokenizer,
-                )
-        print('--- emu2 loading finished ---')
+            self.path,
+            custom_pipeline="pipeline_emu2_gen",
+            torch_dtype=self.torch_dtype,
+            use_safetensors=self.use_safetensors,
+            variant=self.variant,
+            multimodal_encoder=self.multimodal_encoder,
+            tokenizer=self.tokenizer,
+        )
+        print("--- emu2 loading finished ---")
 
         # link all modules of the emu model to this class. This class becomes a puppet of emu with added functioins for RL
         # this transformation is to make the emu model more suitable for RL training (with trl) but keep its original model and class intact
@@ -68,68 +90,58 @@ class EmuRL(LoraLoaderMixin):
         self.transform = self.emu_pipeline.transform
         self.negative_prompt = self.emu_pipeline.negative_prompt
 
-    def device(self, module=None):
-        if module is None:
-            return next(self.emu_pipeline.parameters()).device
-        return next(module.parameters()).device
-
-    def dtype(self, module=None):
-        if module is None:
-            return next(self.emu_pipeline.parameters()).dtype
-        return next(module.parameters()).dtype
-
     # newly added for ddpo
     def check_inputs(
-            self,
-            prompt,
-            height,
-            width,
-            callback_steps,
-            negative_prompt=None,
-            prompt_embeds=None,
-            negative_prompt_embeds=None,
-            callback_on_step_end_tensor_inputs=None,
-            ):
+        self,
+        prompt,
+        height,
+        width,
+        callback_steps,
+        negative_prompt=None,
+        prompt_embeds=None,
+        negative_prompt_embeds=None,
+        callback_on_step_end_tensor_inputs=None,
+    ):
         if height % 8 != 0 or width % 8 != 0:
             raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
 
         if callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0):
             raise ValueError(
-                    f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
-                    f" {type(callback_steps)}."
-                    )
+                f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
+                f" {type(callback_steps)}."
+            )
         if callback_on_step_end_tensor_inputs is not None and not all(
-                k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
-                ):
+            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
+        ):
             raise ValueError(
-                    f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
-                    )
+                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
+            )
 
         if prompt is not None and prompt_embeds is not None:
             raise ValueError(
-                    f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                    " only forward one of the two."
-                    )
+                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+                " only forward one of the two."
+            )
         elif prompt is None and prompt_embeds is None:
             raise ValueError(
-                    "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-                    )
+                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
+            )
         elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
             raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
 
         if negative_prompt is not None and negative_prompt_embeds is not None:
             raise ValueError(
-                    f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                    f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-                    )
+                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
+                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+            )
 
         if prompt_embeds is not None and negative_prompt_embeds is not None:
             if prompt_embeds.shape != negative_prompt_embeds.shape:
                 raise ValueError(
-                        "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                        f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
-                        f" {negative_prompt_embeds.shape}."
-                        )
+                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
+                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
+                    f" {negative_prompt_embeds.shape}."
+                )
 
     # newly added for ddpo
     @property
@@ -156,27 +168,27 @@ class EmuRL(LoraLoaderMixin):
 
     # newly added for ddpo
     def prepare_latents(
-            self,
+        self,
+        batch_size,
+        num_channels_latents,
+        height,
+        width,
+        dtype,
+        device,
+        generator,
+        latents=None,
+    ):
+        shape = (
             batch_size,
             num_channels_latents,
-            height,
-            width,
-            dtype,
-            device,
-            generator,
-            latents=None,
-            ):
-        shape = (
-                batch_size,
-                num_channels_latents,
-                height // self.vae_scale_factor,
-                width // self.vae_scale_factor,
-                )
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
+        )
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
-                    f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                    f" size of {batch_size}. Make sure the batch size matches the length of the generators."
-                    )
+                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
+                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+            )
 
         if latents is None:
             latents = torch.randn(shape, device=device, dtype=dtype, generator=generator)
@@ -188,15 +200,15 @@ class EmuRL(LoraLoaderMixin):
         return latents
 
     # newly added for ddpo
-    def _encode_prompt(
-            self,
-            device,
-            num_images_per_prompt,
-            do_classifier_free_guidance,
-            prompt_embeds,
-            negative_prompt_embeds,
-            lora_scale=None,  # a dummy argument
-            ):
+    def _prepare_prompt_embed(
+        self,
+        device,
+        num_images_per_prompt,
+        do_classifier_free_guidance,
+        prompt_embeds,
+        negative_prompt_embeds,
+        lora_scale=None,  # a dummy argument
+    ):
         r"""
         Encodes the prompt into text encoder hidden states.
 
@@ -254,17 +266,29 @@ class EmuRL(LoraLoaderMixin):
 
         return prompt_embeds
 
+    # added for ddpo
+    def _get_negative_prompt_embedding(self, key: str):
+        if key not in self.negative_prompt:
+            self.negative_prompt[key] = self.multimodal_encoder.generate_image(text=[key], tokenizer=self.tokenizer)
+        return self.negative_prompt[key]
+
+    def device(self, module):
+        return next(module.parameters()).device
+
+    def dtype(self, module):
+        return next(module.parameters()).dtype
+
     @torch.no_grad()
     def forward(
-            self,
-            inputs: List[Image.Image | str] | str | Image.Image,
-            height: int = 1024,
-            width: int = 1024,
-            num_inference_steps: int = 50,
-            guidance_scale: float = 3.0,
-            crop_info: List[int] = [0, 0],
-            original_size: List[int] = [1024, 1024],
-            ):
+        self,
+        inputs: List[Image.Image | str] | str | Image.Image,
+        height: int = 1024,
+        width: int = 1024,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 3.0,
+        crop_info: List[int] = [0, 0],
+        original_size: List[int] = [1024, 1024],
+    ):
         if not isinstance(inputs, list):
             inputs = [inputs]
 
@@ -278,10 +302,14 @@ class EmuRL(LoraLoaderMixin):
         do_classifier_free_guidance = guidance_scale > 1.0
 
         # 1. Encode input prompt
-        prompt_embeds = self._prepare_and_encode_inputs(
+        prompt_embeds = (
+            self._prepare_and_encode_inputs(
                 inputs,
                 do_classifier_free_guidance,
-                ).to(dtype).to(device)
+            )
+            .to(dtype)
+            .to(device)
+        )
         batch_size = prompt_embeds.shape[0] // 2 if do_classifier_free_guidance else prompt_embeds.shape[0]
 
         unet_added_conditions = {}
@@ -298,11 +326,11 @@ class EmuRL(LoraLoaderMixin):
 
         # 3. Prepare latent variables
         shape = (
-                batch_size,
-                self.unet.config.in_channels,
-                height // self.vae_scale_factor,
-                width // self.vae_scale_factor,
-                )
+            batch_size,
+            self.unet.config.in_channels,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
+        )
         latents = torch.randn(shape, device=device, dtype=dtype)
         latents = latents * self.scheduler.init_noise_sigma
 
@@ -314,11 +342,11 @@ class EmuRL(LoraLoaderMixin):
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
             noise_pred = self.unet(
-                    latent_model_input,
-                    t,
-                    encoder_hidden_states=prompt_embeds,
-                    added_cond_kwargs=unet_added_conditions,
-                    ).sample
+                latent_model_input,
+                t,
+                encoder_hidden_states=prompt_embeds,
+                added_cond_kwargs=unet_added_conditions,
+            ).sample
 
             # perform guidance
             if do_classifier_free_guidance:
@@ -337,17 +365,16 @@ class EmuRL(LoraLoaderMixin):
         # 7. Convert to PIL
         images = self.numpy_to_pil(images)
         return EmuVisualGenerationPipelineOutput(
-                image=images[0],
-                nsfw_content_detected=None if has_nsfw_concept is None else has_nsfw_concept[0],
-                )
-
+            image=images[0],
+            nsfw_content_detected=None if has_nsfw_concept is None else has_nsfw_concept[0],
+        )
 
     def _prepare_and_encode_inputs(
-            self,
-            inputs: List[str | Image.Image],
-            do_classifier_free_guidance: bool = False,
-            placeholder: str = DEFAULT_IMG_PLACEHOLDER,
-            ):
+        self,
+        inputs: List[str | Image.Image],
+        do_classifier_free_guidance: bool = False,
+        placeholder: str = DEFAULT_IMG_PLACEHOLDER,
+    ):
         device = self.device(self.multimodal_encoder.model.visual)
         dtype = self.dtype(self.multimodal_encoder.model.visual)
 
@@ -377,20 +404,18 @@ class EmuRL(LoraLoaderMixin):
                     self.negative_prompt[key] = self.multimodal_encoder.model.encode_image(image=negative_image)
                 prompt = torch.cat([prompt, self.negative_prompt[key]], dim=0)
         else:
-            prompt = self.multimodal_encoder.generate_image(text=[text_prompt], image=image_prompt, tokenizer=self.tokenizer)
+            prompt = self.multimodal_encoder.generate_image(
+                text=[text_prompt], image=image_prompt, tokenizer=self.tokenizer
+            )
             if do_classifier_free_guidance:
                 key = ""
                 if key not in self.negative_prompt:
-                    self.negative_prompt[key] = self.multimodal_encoder.generate_image(text=[""], tokenizer=self.tokenizer)
+                    self.negative_prompt[key] = self.multimodal_encoder.generate_image(
+                        text=[""], tokenizer=self.tokenizer
+                    )
                 prompt = torch.cat([prompt, self.negative_prompt[key]], dim=0)
 
         return prompt
-
-    # added for ddpo
-    def _get_negative_prompt_embedding(self, key: str):
-        if key not in self.negative_prompt:
-            self.negative_prompt[key] = self.multimodal_encoder.generate_image(text=[key], tokenizer=self.tokenizer)
-        return self.negative_prompt[key]
 
     def decode_latents(self, latents: torch.Tensor) -> np.ndarray:
         latents = 1 / self.vae.config.scaling_factor * latents
@@ -414,18 +439,14 @@ class EmuRL(LoraLoaderMixin):
 
         return pil_images
 
-    def run_safety_checker(
-            self,
-            image: np.ndarray,
-            device: torch.device,
-            dtype: torch.dtype,
-            ):
+    def run_safety_checker(self, images: np.ndarray):
         if self.safety_checker is not None:
-            safety_checker_input = self.feature_extractor(self.numpy_to_pil(image), return_tensors="pt").to(device)
-            image, has_nsfw_concept = self.safety_checker(
-                    images=image, clip_input=safety_checker_input.pixel_values.to(dtype)
-                    )
+            device = self.device(self.safety_checker)
+            dtype = self.dtype(self.safety_checker)
+            safety_checker_input = self.feature_extractor(self.numpy_to_pil(images), return_tensors="pt").to(device)
+            images, has_nsfw_concept = self.safety_checker(
+                images=images, clip_input=safety_checker_input.pixel_values.to(dtype)
+            )
         else:
             has_nsfw_concept = None
-        return image, has_nsfw_concept
-
+        return images, has_nsfw_concept
