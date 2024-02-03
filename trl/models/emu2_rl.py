@@ -17,6 +17,7 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
+from diffusers.image_processor import VaeImageProcessor
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -46,7 +47,7 @@ class EmuVisualGenerationPipelineOutput(BaseOutput):
     nsfw_content_detected: Optional[bool]
 
 
-class EmuRL(LoraLoaderMixin, DiffusionPipeline, TextualInversionLoaderMixin, IPAdapterMixin, FromSingleFileMixin):
+class EmuRL(LoraLoaderMixin):
     _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds"]
 
     def __init__(self, path, torch_dtype=torch.bfloat16, variant="bf16", use_safetensors=True) -> None:
@@ -89,6 +90,7 @@ class EmuRL(LoraLoaderMixin, DiffusionPipeline, TextualInversionLoaderMixin, IPA
         self.vae_scale_factor = self.emu_pipeline.vae_scale_factor
         self.transform = self.emu_pipeline.transform
         self.negative_prompt = self.emu_pipeline.negative_prompt
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
     # newly added for ddpo
     def check_inputs(
@@ -279,7 +281,7 @@ class EmuRL(LoraLoaderMixin, DiffusionPipeline, TextualInversionLoaderMixin, IPA
         return next(module.parameters()).dtype
 
     @torch.no_grad()
-    def forward(
+    def __call__(
         self,
         inputs: List[Image.Image | str] | str | Image.Image,
         height: int = 1024,

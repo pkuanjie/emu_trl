@@ -248,7 +248,7 @@ class DDPOEmuTrainer(BaseTrainer):
             global_step (int): The updated global step.
 
         """
-        samples, prompt_image_data = self._generate_samples(
+        samples, prompt_image_data, unet_conditions = self._generate_samples(
             iterations=self.config.sample_num_batches_per_epoch,
             batch_size=self.config.sample_batch_size,
         )
@@ -326,7 +326,7 @@ class DDPOEmuTrainer(BaseTrainer):
             samples_batched = [dict(zip(original_keys, row_values)) for row_values in transposed_values]
 
             self.sd_pipeline.unet.train()
-            global_step = self._train_batched_samples(inner_epoch, epoch, global_step, samples_batched)
+            global_step = self._train_batched_samples(inner_epoch, epoch, global_step, samples_batched, unet_conditions)
             # ensure optimization step at the end of the inner epoch
             if not self.accelerator.sync_gradients:
                 raise ValueError(
@@ -338,7 +338,7 @@ class DDPOEmuTrainer(BaseTrainer):
 
         return global_step
 
-    def calculate_loss(self, latents, timesteps, next_latents, log_probs, advantages, embeds):
+    def calculate_loss(self, latents, timesteps, next_latents, log_probs, advantages, embeds, unet_conditions):
         """
         Calculate the loss for a batch of an unpacked sample
 
@@ -361,12 +361,17 @@ class DDPOEmuTrainer(BaseTrainer):
             loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor)
             (all of these are of shape (1,))
         """
+        unet_added_conditions = {}
+        unet_added_conditions["time_ids"] = unet_conditions[0]
+        unet_added_conditions["text_embeds"] = torch.mean(embeds, dim=1)
         with self.autocast():
             if self.config.train_cfg:
                 noise_pred = self.sd_pipeline.unet(
                     torch.cat([latents] * 2),
                     torch.cat([timesteps] * 2),
                     encoder_hidden_states=embeds,
+                    added_cond_kwargs=unet_added_conditions,
+                    cross_attention_kwargs=unet_conditions[1],
                 ).sample
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + self.config.sample_guidance_scale * (
@@ -377,6 +382,8 @@ class DDPOEmuTrainer(BaseTrainer):
                     latents,
                     timesteps,
                     encoder_hidden_states=embeds,
+                    added_cond_kwargs=unet_added_conditions,
+                    cross_attention_kwargs=unet_conditions[1],
                 ).sample
             # compute the log prob of next_latents given latents under the current model
 
@@ -472,7 +479,7 @@ class DDPOEmuTrainer(BaseTrainer):
             )
 
             with self.autocast():
-                sd_output = self.sd_pipeline(
+                sd_output, unet_conditions = self.sd_pipeline(
                     prompt_embeds=prompt_embeds,
                     negative_prompt_embeds=sample_neg_prompt_embeds,
                     num_inference_steps=self.config.sample_num_steps,
@@ -502,9 +509,9 @@ class DDPOEmuTrainer(BaseTrainer):
             )
             prompt_image_pairs.append([images, prompts, prompt_metadata])
 
-        return samples, prompt_image_pairs
+        return samples, prompt_image_pairs, unet_conditions
 
-    def _train_batched_samples(self, inner_epoch, epoch, global_step, batched_samples):
+    def _train_batched_samples(self, inner_epoch, epoch, global_step, batched_samples, unet_conditions):
         """
         Train on a batch of samples. Main training segment
 
@@ -538,6 +545,7 @@ class DDPOEmuTrainer(BaseTrainer):
                         sample["log_probs"][:, j],
                         sample["advantages"],
                         embeds,
+                        unet_conditions,
                     )
                     info["approx_kl"].append(approx_kl)
                     info["clipfrac"].append(clipfrac)

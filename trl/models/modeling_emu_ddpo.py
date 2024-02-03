@@ -452,7 +452,7 @@ def pipeline_step(
         unet_added_conditions["time_ids"] = torch.cat([time_ids, time_ids], dim=0)
     else:
         unet_added_conditions["time_ids"] = time_ids
-        unet_added_conditions["text_embeds"] = torch.mean(prompt_embeds, dim=1)
+    unet_added_conditions["text_embeds"] = torch.mean(prompt_embeds, dim=1)
 
     # 4. Prepare timesteps
     self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -508,9 +508,10 @@ def pipeline_step(
             if callback is not None and i % callback_steps == 0:
                 callback(i, t, latents)
 
+
     if not output_type == "latent":
         image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-        image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+        image, has_nsfw_concept = self.run_safety_checker(image)
     else:
         image = latents
         has_nsfw_concept = None
@@ -522,11 +523,21 @@ def pipeline_step(
 
     image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
+    # image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+    # if not output_type == "latent":
+    #     image = self.decode_latents(latents)
+    #     image, has_nsfw_concept = self.run_safety_checker(image)
+    # else:
+    #     image = latents
+    #     has_nsfw_concept = None
+
+    # image = self.numpy_to_pil(image)
+
     # Offload last model to CPU
     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
         self.final_offload_hook.offload()
 
-    return DDPOEmuPipelineOutput(image, all_latents, all_log_probs)
+    return DDPOEmuPipelineOutput(image, all_latents, all_log_probs), (unet_added_conditions["time_ids"], cross_attention_kwargs)
 
 
 class DefaultDDPOEmuPipeline(DDPOEmuPipeline):
