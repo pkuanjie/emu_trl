@@ -35,7 +35,8 @@ from .ddpo_config import DDPOConfig
 
 if is_diffusers_available():
     from .ddpo_trainer import DDPOTrainer
-    from .ddpo_emu_trainer import DDPOEmuTrainer
+    from .ddpo_emu1_trainer import DDPOEmu1Trainer
+    from .ddpo_emu2_trainer import DDPOEmu2Trainer
 
 from .dpo_trainer import DPOTrainer
 from .iterative_sft_trainer import IterativeSFTTrainer

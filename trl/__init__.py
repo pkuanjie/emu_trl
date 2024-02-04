@@ -38,7 +38,9 @@ if is_diffusers_available():
         DDPOSchedulerOutput,
         DDPOStableDiffusionPipeline,
         DefaultDDPOStableDiffusionPipeline,
-        DDPOEmuPipeline,
-        DefaultDDPOEmuPipeline,
+        DDPOEmu1Pipeline,
+        DDPOEmu2Pipeline,
+        DefaultDDPOEmu1Pipeline,
+        DefaultDDPOEmu2Pipeline,
     )
-    from .trainer import DDPOConfig, DDPOTrainer, DDPOEmuTrainer
+    from .trainer import DDPOConfig, DDPOTrainer, DDPOEmu1Trainer, DDPOEmu2Trainer
