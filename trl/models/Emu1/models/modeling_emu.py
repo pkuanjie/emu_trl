@@ -10,12 +10,18 @@ from .transformer import LayerNorm
 from .prediction_mixin import PredictClassMixin
 
 try:
-    from transformers import BeamSearchScorer, LogitsProcessorList, MinLengthLogitsProcessor, StoppingCriteriaList, \
-        MaxLengthCriteria
+    from transformers import (
+        BeamSearchScorer,
+        LogitsProcessorList,
+        MinLengthLogitsProcessor,
+        StoppingCriteriaList,
+        MaxLengthCriteria,
+    )
 except ImportError as e:
     pass
 
 from transformers.generation.configuration_utils import GenerationConfig
+
 GENERATION_CONFIG = GenerationConfig(bos_token_id=1, eos_token_id=2, pad_token_id=32000)
 
 
@@ -31,7 +37,7 @@ class Emu(nn.Module, PredictClassMixin):
         pad_id: int = 0,
         args=None,
         apply_lemmatizer=False,
-        prompt=None
+        prompt=None,
     ):
         super().__init__()
 
@@ -51,22 +57,25 @@ class Emu(nn.Module, PredictClassMixin):
             self.visual = self.visual.eval()
 
         norm_layer = partial(LayerNorm, eps=1e-6)
-        
+
         self.ln_visual = norm_layer(vision_cfg.width)
         nn.init.constant_(self.ln_visual.bias, 0)
         nn.init.constant_(self.ln_visual.weight, 1.0)
 
-        from models.modeling_llama import LLaMAForClsAndRegression
+        from .modeling_llama import LLaMAForClsAndRegression
+
         self.decoder = LLaMAForClsAndRegression(args=args)
 
         if multimodal_cfg.freeze:
             self.decoder.requires_grad_(False)
             self.decoder.eval()
 
-        self.cformer = CausalFormer(args=args,
-                                  n_causal=vladapter_cfg.n_causal,
-                                  vision_width=vision_cfg.width,
-                                  output_dim=self.decoder.config.d_model)
+        self.cformer = CausalFormer(
+            args=args,
+            n_causal=vladapter_cfg.n_causal,
+            vision_width=vision_cfg.width,
+            output_dim=self.decoder.config.d_model,
+        )
 
         self.n_causal = vladapter_cfg.n_causal
         self.pad_id = pad_id
@@ -83,8 +92,9 @@ class Emu(nn.Module, PredictClassMixin):
         self.cformer.set_grad_checkpointing()
         self.decoder.set_grad_checkpointing()
 
-    def forward(self, image, text_input, input_mask, text_output=None, output_mask=None, image_latent=None,
-                image_features=None):
+    def forward(
+        self, image, text_input, input_mask, text_output=None, output_mask=None, image_latent=None, image_features=None
+    ):
         # [B, C, H, W] --> [B, n_patch, C_vis]
         if image_latent is None or image_features is None:
             image_features = self.visual.forward_features(image)
@@ -93,8 +103,13 @@ class Emu(nn.Module, PredictClassMixin):
         # [B, n_patch, C_vis] --> [B, n_causal, C_llm]
         image_features = self.cformer(image_features)
         # loss from hf lm model
-        loss = self.decoder(image_features, text_input=text_input, text_output=text_output, text_mask=input_mask,
-                            output_mask=output_mask)
+        loss = self.decoder(
+            image_features,
+            text_input=text_input,
+            text_output=text_output,
+            text_mask=input_mask,
+            output_mask=output_mask,
+        )
         return loss
 
     @torch.no_grad()
@@ -118,7 +133,7 @@ class Emu(nn.Module, PredictClassMixin):
         GENERATION_CONFIG.pad_token_id = self.decoder.tokenizer.pad_token_id
         GENERATION_CONFIG.bos_token_id = self.decoder.tokenizer.bos_token_id
         GENERATION_CONFIG.eos_token_id = self.decoder.tokenizer.eos_token_id
-        
+
         image = samples["image"]
         if image is not None:
             image = image.to(dtype=torch.bfloat16)
@@ -127,13 +142,14 @@ class Emu(nn.Module, PredictClassMixin):
 
         prompt = samples["prompt"] if "prompt" in samples.keys() else self.prompt
 
-        from models.modeling_llama import LLaMAForClsAndRegression
+        from .modeling_llama import LLaMAForClsAndRegression
+
         if isinstance(self.decoder, LLaMAForClsAndRegression):
             self.decoder.tokenizer.padding_side = "left"
 
         input_tokens = self.decoder.tokenizer(
-            prompt, 
-            padding="longest", 
+            prompt,
+            padding="longest",
             return_tensors="pt",
             add_special_tokens=True,
         ).to(self.args.device)
@@ -178,9 +194,7 @@ class Emu(nn.Module, PredictClassMixin):
                 **kwargs,
             )
 
-            output_text = self.decoder.tokenizer.batch_decode(
-                outputs, skip_special_tokens=True
-            ) 
+            output_text = self.decoder.tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
         return output_text
 
@@ -210,20 +224,22 @@ class Emu(nn.Module, PredictClassMixin):
             else:
                 text = [f"{t}<image>" for t in text]
 
-            inputs = self.decoder.tokenizer(text, padding="longest", return_tensors="pt")
+            inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
             attention_mask = inputs.attention_mask.to(device)
             input_ids = inputs.input_ids.to(device)
 
             text_embeds = self.decoder.lm.model.embed_tokens(input_ids)
 
-            image_idx = (input_ids == IMAGE)
+            image_idx = input_ids == IMAGE
             cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
             if image is not None:
                 prompt_idx = torch.logical_and(image_idx, cumsum_idx > num_img_token)
                 text_embeds[prompt_idx] = prompt_image_embeds
 
             if target_image_embeds is not None:
-                target_idx = torch.logical_and(image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token))
+                target_idx = torch.logical_and(
+                    image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token)
+                )
                 text_embeds[target_idx] = target_image_embeds
 
             outputs = self.decoder.lm.model(
@@ -235,7 +251,9 @@ class Emu(nn.Module, PredictClassMixin):
 
             image_idx = (input_ids == IMAGE) + (input_ids == BOI)
             cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
-            target_idx = torch.logical_and(image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token+1))
+            target_idx = torch.logical_and(
+                image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token + 1)
+            )
 
             hidden_states = outputs.hidden_states[-1]
             target_image_embeds = hidden_states[target_idx]

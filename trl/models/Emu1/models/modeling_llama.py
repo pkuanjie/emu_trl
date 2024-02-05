@@ -2,7 +2,7 @@
 LLaMA model from transformers, following stanford's Alpaca
 """
 
-MODEL_PATH = "./models/llama_config"
+import os
 
 from typing import Dict, List, Optional
 from dataclasses import dataclass
@@ -14,24 +14,27 @@ import transformers
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.llama.configuration_llama import LlamaConfig
 
+current_dir = os.path.dirname(__file__)
+MODEL_PATH = os.path.join(current_dir, "llama_config")
+
 IGNORE_INDEX = -100
-DEFAULT_BOS_TOKEN = '<s>'
-DEFAULT_EOS_TOKEN = '</s>'
+DEFAULT_BOS_TOKEN = "<s>"
+DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_UNK_TOKEN = "<unk>"
 
 DEFAULT_IMG_START_TOKEN = "[IMG]"
 DEFAULT_IMG_END_TOKEN = "[/IMG]"
 DEFAULT_IMG_TOKEN = "<image>"
-USER_TOKEN = '[USER]'
-ASSISTANT_TOKEN = '[ASSISTANT]'
+USER_TOKEN = "[USER]"
+ASSISTANT_TOKEN = "[ASSISTANT]"
 
 
 def smart_tokenizer_and_embedding_resize(
-        special_tokens_dict: Dict,
-        tokenizer: transformers.PreTrainedTokenizer,
-        model: transformers.PreTrainedModel,
-        resize_output: bool = True,
+    special_tokens_dict: Dict,
+    tokenizer: transformers.PreTrainedTokenizer,
+    model: transformers.PreTrainedModel,
+    resize_output: bool = True,
 ):
     """Resize tokenizer and embedding.
 
@@ -58,23 +61,24 @@ class RegressCausalLMOutputWithPast(CausalLMOutputWithPast):
 
 
 class LlamaForReg(transformers.LlamaForCausalLM):
-    def forward(self,
-                input_ids: torch.LongTensor = None,
-                attention_mask: Optional[torch.Tensor] = None,
-                position_ids: Optional[torch.LongTensor] = None,
-                past_key_values: Optional[List[torch.FloatTensor]] = None,
-                inputs_embeds: Optional[torch.FloatTensor] = None,
-                labels: Optional[torch.LongTensor] = None,
-                use_cache: Optional[bool] = None,
-                output_attentions: Optional[bool] = None,
-                output_hidden_states: Optional[bool] = None,
-                return_dict: Optional[bool] = None,
-                reduction: Optional[str] = "mean",
-                regress_mask: torch.Tensor = None,
-                img_length: int = None,
-                args=None,
-                regress_labels=None
-                ):
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        reduction: Optional[str] = "mean",
+        regress_mask: torch.Tensor = None,
+        img_length: int = None,
+        args=None,
+        regress_labels=None,
+    ):
         """
         :param self:
         :param inputs_embeds: shape [B, 1 + n_image + n_token, C]
@@ -141,8 +145,13 @@ class LLaMAForClsAndRegression(nn.Module):
         )
 
         if args.instruct:  # for instruction tuning, [USER] and [ASSISTANT] tokens are added
-            special_token_list = [DEFAULT_IMG_START_TOKEN, DEFAULT_IMG_END_TOKEN, DEFAULT_IMG_TOKEN, USER_TOKEN,
-                                  ASSISTANT_TOKEN]
+            special_token_list = [
+                DEFAULT_IMG_START_TOKEN,
+                DEFAULT_IMG_END_TOKEN,
+                DEFAULT_IMG_TOKEN,
+                USER_TOKEN,
+                ASSISTANT_TOKEN,
+            ]
         else:
             special_token_list = [DEFAULT_IMG_START_TOKEN, DEFAULT_IMG_END_TOKEN, DEFAULT_IMG_TOKEN]
 
@@ -151,7 +160,7 @@ class LLaMAForClsAndRegression(nn.Module):
             bos_token=DEFAULT_BOS_TOKEN,
             eos_token=DEFAULT_EOS_TOKEN,
             unk_token=DEFAULT_UNK_TOKEN,
-            additional_special_tokens=special_token_list
+            additional_special_tokens=special_token_list,
         )
 
         if self.tokenizer.pad_token is None:
@@ -174,13 +183,13 @@ class LLaMAForClsAndRegression(nn.Module):
 
         self.prompt = None
 
-        self.image_token_id = self.tokenizer.convert_tokens_to_ids(['<image>'])[0]
+        self.image_token_id = self.tokenizer.convert_tokens_to_ids(["<image>"])[0]
         print(f"image_token_id: {self.image_token_id}")
 
-        self.img_token_id = self.tokenizer.convert_tokens_to_ids(['[IMG]'])[0]
+        self.img_token_id = self.tokenizer.convert_tokens_to_ids(["[IMG]"])[0]
         print(f"[IMG] token id: {self.img_token_id}")
 
-        self.img_end_token_id = self.tokenizer.convert_tokens_to_ids(['[/IMG]'])[0]
+        self.img_end_token_id = self.tokenizer.convert_tokens_to_ids(["[/IMG]"])[0]
         print(f"[/IMG] token id: {self.img_end_token_id}")
 
     def get_num_layers(self):
@@ -203,39 +212,35 @@ class LLaMAForClsAndRegression(nn.Module):
         B, n_causal, _ = image_embeds.shape
 
         # mask [PAD]
-        targets = text_input.masked_fill(
-            text_input == self.tokenizer.pad_token_id, -100
-        )
+        targets = text_input.masked_fill(text_input == self.tokenizer.pad_token_id, -100)
         # mask <image>
-        targets = targets.masked_fill(
-            targets == self.image_token_id, -100
-        )
+        targets = targets.masked_fill(targets == self.image_token_id, -100)
         # mask [IMG]
-        targets = targets.masked_fill(
-            targets == self.img_token_id, -100
-        )
+        targets = targets.masked_fill(targets == self.img_token_id, -100)
         # mask [/IMG]
-        targets = targets.masked_fill(
-            targets == self.img_end_token_id, -100
-        )
+        targets = targets.masked_fill(targets == self.img_end_token_id, -100)
 
         text_embeds = self.lm.model.embed_tokens(text_input)  # [B, seq_len, C]
 
         all_image_indices = (text_input == self.image_token_id).to(image_embeds.device)
 
-        assert (text_input[all_image_indices].shape[0] == image_embeds.shape[0] * image_embeds.shape[1]), \
-            f"{text_input[text_input == self.image_token_id].shape[0]} != {image_embeds.shape[0]}*{image_embeds.shape[1]}"
-        assert (image_embeds.shape[-1] == text_embeds.shape[-1]), f"{image_embeds.shape[-1]} != {text_embeds.shape[-1]}"
+        assert (
+            text_input[all_image_indices].shape[0] == image_embeds.shape[0] * image_embeds.shape[1]
+        ), f"{text_input[text_input == self.image_token_id].shape[0]} != {image_embeds.shape[0]}*{image_embeds.shape[1]}"
+        assert image_embeds.shape[-1] == text_embeds.shape[-1], f"{image_embeds.shape[-1]} != {text_embeds.shape[-1]}"
 
         image_embeds = image_embeds.reshape(-1, image_embeds.shape[-1])
 
         text_embeds[all_image_indices] = image_embeds
 
         regress_label_mask = ((text_input == self.image_token_id) + (text_input == self.img_end_token_id)).to(
-            image_embeds.device)
+            image_embeds.device
+        )
 
         regress_labels = text_embeds[regress_label_mask]
-        regress_mask = ((text_input == self.image_token_id) + (text_input == self.img_token_id)).to(image_embeds.device)
+        regress_mask = ((text_input == self.image_token_id) + (text_input == self.img_token_id)).to(
+            image_embeds.device
+        )
 
         outputs = self.lm(
             inputs_embeds=text_embeds,
@@ -245,7 +250,7 @@ class LLaMAForClsAndRegression(nn.Module):
             regress_mask=regress_mask,
             img_length=n_causal,
             args=self.args,
-            regress_labels=regress_labels.detach()
+            regress_labels=regress_labels.detach(),
             # regress_labels=text_embeds
         )
 

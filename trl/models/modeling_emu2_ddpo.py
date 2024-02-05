@@ -36,7 +36,7 @@ if is_peft_available():
 
 
 @dataclass
-class DDPOEmuPipelineOutput(object):
+class DDPOEmu2PipelineOutput(object):
     """
     Output class for the diffusers pipeline of emu to be finetuned with the DDPO trainer
 
@@ -56,7 +56,7 @@ class DDPOEmuPipelineOutput(object):
 
 
 @dataclass
-class DDPOEmuSchedulerOutput(object):
+class DDPOEmu2SchedulerOutput(object):
     """
     Output class for the diffusers scheduler of emu to be finetuned with the DDPO trainer
 
@@ -71,15 +71,15 @@ class DDPOEmuSchedulerOutput(object):
     log_probs: torch.Tensor
 
 
-class DDPOEmuPipeline(object):
+class DDPOEmu2Pipeline(object):
     """
     Main class for the diffusers pipeline of emu to be finetuned with the DDPO trainer
     """
 
-    def __call__(self, *args, **kwargs) -> DDPOEmuPipelineOutput:
+    def __call__(self, *args, **kwargs) -> DDPOEmu2PipelineOutput:
         raise NotImplementedError
 
-    def scheduler_step(self, *args, **kwargs) -> DDPOEmuSchedulerOutput:
+    def scheduler_step(self, *args, **kwargs) -> DDPOEmu2SchedulerOutput:
         raise NotImplementedError
 
     @property
@@ -189,7 +189,7 @@ def scheduler_step(
     use_clipped_model_output: bool = False,
     generator=None,
     prev_sample: Optional[torch.FloatTensor] = None,
-) -> DDPOEmuSchedulerOutput:
+) -> DDPOEmu2SchedulerOutput:
     """
 
     Predict the sample at the previous timestep by reversing the SDE. Core function to propagate the diffusion
@@ -312,7 +312,7 @@ def scheduler_step(
     # mean along all but batch dimension
     log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
 
-    return DDPOEmuSchedulerOutput(prev_sample.type(sample.dtype), log_prob)
+    return DDPOEmu2SchedulerOutput(prev_sample.type(sample.dtype), log_prob)
 
 
 # 1. The output type for call is different as the logprobs are now returned
@@ -508,7 +508,6 @@ def pipeline_step(
             if callback is not None and i % callback_steps == 0:
                 callback(i, t, latents)
 
-
     if not output_type == "latent":
         image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
         image, has_nsfw_concept = self.run_safety_checker(image)
@@ -537,10 +536,13 @@ def pipeline_step(
     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
         self.final_offload_hook.offload()
 
-    return DDPOEmuPipelineOutput(image, all_latents, all_log_probs), (unet_added_conditions["time_ids"], cross_attention_kwargs)
+    return DDPOEmu2PipelineOutput(image, all_latents, all_log_probs), (
+        unet_added_conditions["time_ids"],
+        cross_attention_kwargs,
+    )
 
 
-class DefaultDDPOEmuPipeline(DDPOEmuPipeline):
+class DefaultDDPOEmu2Pipeline(DDPOEmu2Pipeline):
     def __init__(self, pretrained_model_name: str, *, use_lora: bool = True):
         self.emu_pipeline = EmuRL(path=pretrained_model_name)
 
@@ -568,10 +570,10 @@ class DefaultDDPOEmuPipeline(DDPOEmuPipeline):
         self.emu_pipeline.multimodal_encoder.requires_grad_(False)
         self.emu_pipeline.unet.requires_grad_(not self.use_lora)
 
-    def __call__(self, *args, **kwargs) -> DDPOEmuPipelineOutput:
+    def __call__(self, *args, **kwargs) -> DDPOEmu2PipelineOutput:
         return pipeline_step(self.emu_pipeline, *args, **kwargs)
 
-    def scheduler_step(self, *args, **kwargs) -> DDPOEmuSchedulerOutput:
+    def scheduler_step(self, *args, **kwargs) -> DDPOEmu2SchedulerOutput:
         return scheduler_step(self.emu_pipeline.scheduler, *args, **kwargs)
 
     @property

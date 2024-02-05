@@ -1,5 +1,5 @@
-export CUDA_VISIBLE_DEVICES='0,1'
-NUM_GPUS=2
+export CUDA_VISIBLE_DEVICES='0'
+NUM_GPUS=1
 ACCELERATE_CONFIG='./accelerate_config.yaml'
 rm -rf ./save
 accelerate launch --config_file $ACCELERATE_CONFIG --num_processes=$NUM_GPUS examples/scripts/ddpo.py \

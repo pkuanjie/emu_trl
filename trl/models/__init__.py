@@ -33,9 +33,11 @@ if is_diffusers_available():
         DDPOStableDiffusionPipeline,
         DefaultDDPOStableDiffusionPipeline,
     )
-    from .modeling_emu_ddpo import (
+    from .modeling_emu1_ddpo import (
         DDPOEmu1Pipeline,
-        DDPOEmu2Pipeline,
         DefaultDDPOEmu1Pipeline,
+    )
+    from .modeling_emu2_ddpo import (
+        DDPOEmu2Pipeline,
         DefaultDDPOEmu2Pipeline,
     )

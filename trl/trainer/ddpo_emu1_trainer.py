@@ -253,6 +253,11 @@ class DDPOEmu1Trainer(BaseTrainer):
             batch_size=self.config.sample_batch_size,
         )
 
+        # for key in samples[0].keys():
+        #     for i in range(len(samples)):
+        #         print(f"key: {key} | value: {samples[i][key].shape}")
+        #     print("=============================")
+        # exit()
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
         rewards, rewards_metadata = self.compute_rewards(
@@ -473,10 +478,10 @@ class DDPOEmu1Trainer(BaseTrainer):
         for _ in range(iterations):
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
 
-            prompt_ids = self.sd_pipeline.tokenizer(prompts, padding="longest", return_tensors="pt").input_ids.to(
+            prompt_ids = self.sd_pipeline.tokenizer(prompts, padding="max_length", return_tensors="pt").input_ids.to(
                 self.accelerator.device
             )
-            prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompts, tokenizer=self.sd_pipeline.tokenizer)
+            prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompts)
 
             with self.autocast():
                 sd_output, unet_conditions = self.sd_pipeline(
@@ -554,9 +559,11 @@ class DDPOEmu1Trainer(BaseTrainer):
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
-                            self.trainable_layers.parameters()
-                            if not isinstance(self.trainable_layers, list)
-                            else self.trainable_layers,
+                            (
+                                self.trainable_layers.parameters()
+                                if not isinstance(self.trainable_layers, list)
+                                else self.trainable_layers
+                            ),
                             self.config.train_max_grad_norm,
                         )
                     self.optimizer.step()

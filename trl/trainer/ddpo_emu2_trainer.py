@@ -26,7 +26,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import whoami
 
-from ..models import DDPOStableDiffusionPipeline, DDPOEmuPipeline
+from ..models import DDPOStableDiffusionPipeline, DDPOEmu2Pipeline
 from . import BaseTrainer, DDPOConfig
 from .utils import PerPromptStatTracker
 
@@ -58,9 +58,9 @@ def log_with_time(message):
     print(f"time: {c} | {message}")
 
 
-class DDPOEmuTrainer(BaseTrainer):
+class DDPOEmu2Trainer(BaseTrainer):
     """
-    The DDPOEmuTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
+    The DDPOEmu2Trainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
     Note, this trainer is heavily inspired by the work here: https://github.com/kvablack/ddpo-pytorch
     As of now only Stable Diffusion based pipelines are supported
 
@@ -80,7 +80,7 @@ class DDPOEmuTrainer(BaseTrainer):
         config: DDPOConfig,
         reward_function: Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor],
         prompt_function: Callable[[], Tuple[str, Any]],
-        sd_pipeline: DDPOEmuPipeline,
+        sd_pipeline: DDPOEmu2Pipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
     ):
         if image_samples_hook is None:
@@ -326,7 +326,9 @@ class DDPOEmuTrainer(BaseTrainer):
             samples_batched = [dict(zip(original_keys, row_values)) for row_values in transposed_values]
 
             self.sd_pipeline.unet.train()
-            global_step = self._train_batched_samples(inner_epoch, epoch, global_step, samples_batched, unet_conditions)
+            global_step = self._train_batched_samples(
+                inner_epoch, epoch, global_step, samples_batched, unet_conditions
+            )
             # ensure optimization step at the end of the inner epoch
             if not self.accelerator.sync_gradients:
                 raise ValueError(
@@ -554,9 +556,11 @@ class DDPOEmuTrainer(BaseTrainer):
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
-                            self.trainable_layers.parameters()
-                            if not isinstance(self.trainable_layers, list)
-                            else self.trainable_layers,
+                            (
+                                self.trainable_layers.parameters()
+                                if not isinstance(self.trainable_layers, list)
+                                else self.trainable_layers
+                            ),
                             self.config.train_max_grad_norm,
                         )
                     self.optimizer.step()

@@ -1,3 +1,5 @@
 wandb/
 emu2_ckpts/
+emu_ckpts/
 save/
+save_emu1/

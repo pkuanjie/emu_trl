@@ -52,9 +52,11 @@ This is a diffusion model that has been fine-tuned with reinforcement learning t
 
 """
 
+
 def log_with_time(message):
     c = datetime.now()
     print(f"time: {c} | {message}")
+
 
 class DDPOTrainer(BaseTrainer):
     """
@@ -256,6 +258,11 @@ class DDPOTrainer(BaseTrainer):
             iterations=self.config.sample_num_batches_per_epoch,
             batch_size=self.config.sample_batch_size,
         )
+        for key in samples[0].keys():
+            for i in range(len(samples)):
+                print(f"key: {key} | value: {samples[i][key].shape}")
+            print("=============================")
+        exit()
 
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
@@ -265,7 +272,6 @@ class DDPOTrainer(BaseTrainer):
 
         for i, image_data in enumerate(prompt_image_data):
             image_data.extend([rewards[i], rewards_metadata[i]])
-
 
         if self.image_samples_callback is not None:
             if self.accelerator.is_main_process:
@@ -553,9 +559,11 @@ class DDPOTrainer(BaseTrainer):
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
-                            self.trainable_layers.parameters()
-                            if not isinstance(self.trainable_layers, list)
-                            else self.trainable_layers,
+                            (
+                                self.trainable_layers.parameters()
+                                if not isinstance(self.trainable_layers, list)
+                                else self.trainable_layers
+                            ),
                             self.config.train_max_grad_norm,
                         )
                     self.optimizer.step()

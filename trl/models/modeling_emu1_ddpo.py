@@ -35,6 +35,17 @@ if is_peft_available():
     from peft.utils import get_peft_model_state_dict
 
 
+class AttrDict(dict):
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(f"No such attribute: {key}")
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
 @dataclass
 class DDPOEmu1PipelineOutput(object):
     """
@@ -409,15 +420,15 @@ def pipeline_step(
     width = width or self.unet.config.sample_size * self.vae_scale_factor
 
     # 1. Check inputs. Raise error if not correct
-    self.check_inputs(
-        prompt,
-        height,
-        width,
-        callback_steps,
-        negative_prompt,
-        prompt_embeds,
-        negative_prompt_embeds,
-    )
+    # self.check_inputs(
+    #     prompt,
+    #     height,
+    #     width,
+    #     callback_steps,
+    #     negative_prompt,
+    #     prompt_embeds,
+    #     negative_prompt_embeds,
+    # )
 
     # 2. Define call parameters
     if prompt is not None and isinstance(prompt, str):
@@ -510,7 +521,8 @@ def pipeline_step(
 
     if not output_type == "latent":
         image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-        image, has_nsfw_concept = self.run_safety_checker(image)
+        # image, has_nsfw_concept = self.run_safety_checker(image, device=device, dtype=dtype)
+        has_nsfw_concept = None
     else:
         image = latents
         has_nsfw_concept = None
@@ -548,6 +560,7 @@ class DefaultDDPOEmu1Pipeline(DDPOEmu1Pipeline):
             "ckpt-path": pretrained_model_name,
             "instruct": False,
         }
+        emu1_args = AttrDict(emu1_args)
         self.emu1_pipeline = EmuGenerationPipeline.from_pretrained(
             path=pretrained_model_name,
             args=emu1_args,
@@ -605,7 +618,7 @@ class DefaultDDPOEmu1Pipeline(DDPOEmu1Pipeline):
     # added for ddpo
     def _get_negative_prompt_embedding(self, key: str):
         if key not in self.negative_prompt:
-            self.negative_prompt[key] = self.emu_encoder.generate_image(text=[key], tokenizer=self.tokenizer)
+            self.negative_prompt[key] = self.emu_encoder.generate_image(text=[key])
         return self.negative_prompt[key]
 
     @property
