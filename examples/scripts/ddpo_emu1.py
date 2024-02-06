@@ -217,6 +217,9 @@ if __name__ == "__main__":
         "project_dir": "./save_emu1",
     }
 
+    # remove the project directory if it exists so that it will not cause issues
+    os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")
+
     pipeline = DefaultDDPOEmu1Pipeline(args.pretrained_model, use_lora=args.use_lora)
 
     trainer = DDPOEmu1Trainer(
