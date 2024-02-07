@@ -160,6 +160,7 @@ class DDPOEmu1Trainer(BaseTrainer):
         self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
 
         trainable_layers = self.sd_pipeline.get_trainable_layers()
+        trainable_layers.to(self.accelerator.device, dtype=inference_dtype)
 
         self.accelerator.register_save_state_pre_hook(self._save_model_hook)
         self.accelerator.register_load_state_pre_hook(self._load_model_hook)
@@ -168,10 +169,6 @@ class DDPOEmu1Trainer(BaseTrainer):
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
-
-        self.optimizer = self._setup_optimizer(
-            trainable_layers.parameters() if not isinstance(trainable_layers, list) else trainable_layers
-        )
 
         # emu2 has a more convenient way to get the negative prompt embed
         # self.neg_prompt_embed = self.sd_pipeline.emu_encoder(
@@ -196,13 +193,20 @@ class DDPOEmu1Trainer(BaseTrainer):
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
         if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
-            unet, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+            unet = self.accelerator.prepare(trainable_layers)
             self.trainable_layers = list(filter(lambda p: p.requires_grad, unet.parameters()))
         else:
-            self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+            self.trainable_layers = self.accelerator.prepare(trainable_layers)
 
         if self.config.async_reward_computation:
             self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
+
+        self.optimizer = self._setup_optimizer(
+            self.trainable_layers.parameters()
+            if not isinstance(self.trainable_layers, list)
+            else self.trainable_layers
+        )
+        self.optimizer = self.accelerator.prepare(self.optimizer)
 
         if config.resume_from:
             logger.info(f"Resuming from {config.resume_from}")
@@ -368,17 +372,13 @@ class DDPOEmu1Trainer(BaseTrainer):
             loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor)
             (all of these are of shape (1,))
         """
-        unet_added_conditions = {}
-        unet_added_conditions["time_ids"] = unet_conditions[0]
-        unet_added_conditions["text_embeds"] = torch.mean(embeds, dim=1)
         with self.autocast():
             if self.config.train_cfg:
                 noise_pred = self.sd_pipeline.unet(
                     torch.cat([latents] * 2),
                     torch.cat([timesteps] * 2),
                     encoder_hidden_states=embeds,
-                    added_cond_kwargs=unet_added_conditions,
-                    cross_attention_kwargs=unet_conditions[1],
+                    cross_attention_kwargs=unet_conditions[0],
                 ).sample
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + self.config.sample_guidance_scale * (
@@ -389,8 +389,7 @@ class DDPOEmu1Trainer(BaseTrainer):
                     latents,
                     timesteps,
                     encoder_hidden_states=embeds,
-                    added_cond_kwargs=unet_added_conditions,
-                    cross_attention_kwargs=unet_conditions[1],
+                    cross_attention_kwargs=unet_conditions[0],
                 ).sample
             # compute the log prob of next_latents given latents under the current model
 
@@ -458,6 +457,7 @@ class DDPOEmu1Trainer(BaseTrainer):
         self.sd_pipeline.load_checkpoint(models, input_dir)
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
+    @torch.no_grad()
     def _generate_samples(self, iterations, batch_size):
         """
         Generate samples from the model
@@ -475,7 +475,9 @@ class DDPOEmu1Trainer(BaseTrainer):
 
         sample_neg_prompt_embeds = self.neg_prompt_embed.repeat(batch_size, 1, 1)
 
-        for _ in range(iterations):
+        for s_idx in range(iterations):
+            if self.accelerator.is_main_process:
+                log_with_time(f"Generating samples: {s_idx}/{iterations}")
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
 
             prompt_ids = self.sd_pipeline.tokenizer(prompts, padding="max_length", return_tensors="pt").input_ids.to(
@@ -535,6 +537,8 @@ class DDPOEmu1Trainer(BaseTrainer):
         """
         info = defaultdict(list)
         for i, sample in enumerate(batched_samples):
+            if self.accelerator.is_main_process:
+                log_with_time(f"Training batched samples: {i}/{len(batched_samples)}")
             if self.config.train_cfg:
                 # concat negative prompts to sample prompts to avoid two forward passes
                 embeds = torch.cat([sample["negative_prompt_embeds"], sample["prompt_embeds"]])
@@ -616,7 +620,7 @@ class DDPOEmu1Trainer(BaseTrainer):
             epochs = self.config.num_epochs
         for epoch in range(self.first_epoch, epochs):
             if self.accelerator.is_main_process:
-                print(f"Epoch {epoch} | Global Step: {global_step}")
+                log_with_time(f"Epoch {epoch} | Global Step: {global_step}")
             global_step = self.step(epoch, global_step)
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL DDPO Model") -> None:

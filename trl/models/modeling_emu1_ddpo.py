@@ -332,10 +332,10 @@ def scheduler_step(
 def pipeline_step(
     self,
     prompt: Optional[Union[str, List[str]]] = None,
-    height: int = 1024,
-    width: int = 1024,
+    height: int = 512,
+    width: int = 512,
     num_inference_steps: int = 50,
-    guidance_scale: float = 3.0,
+    guidance_scale: float = 7.5,
     crop_info: List[int] = [0, 0],
     original_size: List[int] = [1024, 1024],
     negative_prompt: Optional[Union[str, List[str]]] = None,
@@ -457,14 +457,6 @@ def pipeline_step(
         lora_scale=text_encoder_lora_scale,
     )
 
-    unet_added_conditions = {}
-    time_ids = torch.LongTensor(original_size + crop_info + [height, width]).to(device)
-    if do_classifier_free_guidance:
-        unet_added_conditions["time_ids"] = torch.cat([time_ids, time_ids], dim=0)
-    else:
-        unet_added_conditions["time_ids"] = time_ids
-    unet_added_conditions["text_embeds"] = torch.mean(prompt_embeds, dim=1)
-
     # 4. Prepare timesteps
     self.scheduler.set_timesteps(num_inference_steps, device=device)
     timesteps = self.scheduler.timesteps
@@ -493,7 +485,6 @@ def pipeline_step(
             latent_model_input,
             t,
             encoder_hidden_states=prompt_embeds,
-            added_cond_kwargs=unet_added_conditions,
             cross_attention_kwargs=cross_attention_kwargs,
         ).sample
 
@@ -548,10 +539,7 @@ def pipeline_step(
     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
         self.final_offload_hook.offload()
 
-    return DDPOEmu1PipelineOutput(image, all_latents, all_log_probs), (
-        unet_added_conditions["time_ids"],
-        cross_attention_kwargs,
-    )
+    return DDPOEmu1PipelineOutput(image, all_latents, all_log_probs), (cross_attention_kwargs,)
 
 
 class DefaultDDPOEmu1Pipeline(DDPOEmu1Pipeline):

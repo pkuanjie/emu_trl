@@ -258,11 +258,6 @@ class DDPOTrainer(BaseTrainer):
             iterations=self.config.sample_num_batches_per_epoch,
             batch_size=self.config.sample_batch_size,
         )
-        for key in samples[0].keys():
-            for i in range(len(samples)):
-                print(f"key: {key} | value: {samples[i][key].shape}")
-            print("=============================")
-        exit()
 
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
