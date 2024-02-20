@@ -70,7 +70,7 @@ class EmuGenerationPipeline(nn.Module, LoraLoaderMixin):
         )
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward(
         self,
         inputs: List[Union[Image.Image, str]],

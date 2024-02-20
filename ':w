@@ -8,7 +8,6 @@ from .causal_former import CausalFormer
 from .model import MultimodalCfg, CLIPVisionCfg, VLadapterCfg, _build_vision_tower
 from .transformer import LayerNorm
 from .prediction_mixin import PredictClassMixin
-from pdb import set_trace as bp
 
 try:
     from transformers import (
@@ -22,22 +21,8 @@ except ImportError as e:
     pass
 
 from transformers.generation.configuration_utils import GenerationConfig
-from pynvml import *
 
 GENERATION_CONFIG = GenerationConfig(bos_token_id=1, eos_token_id=2, pad_token_id=32000)
-
-
-def print_gpu_utilization():
-    nvmlInit()
-    handle = nvmlDeviceGetHandleByIndex(0)
-    info = nvmlDeviceGetMemoryInfo(handle)
-    print(f"GPU memory occupied: {info.used//1024**2} MB.")
-
-
-def print_summary(result):
-    print(f"Time: {result.metrics['train_runtime']:.2f}")
-    print(f"Samples/second: {result.metrics['train_samples_per_second']:.2f}")
-    print_gpu_utilization()
 
 
 class Emu(nn.Module, PredictClassMixin):
@@ -127,7 +112,7 @@ class Emu(nn.Module, PredictClassMixin):
         )
         return loss
 
-    # @torch.no_grad()
+    @torch.no_grad()
     def generate(
         self,
         samples,
@@ -213,131 +198,31 @@ class Emu(nn.Module, PredictClassMixin):
 
         return output_text
 
-    # @torch.no_grad()
-    def teacher_forcing(
+    def generate_embeds(
         self,
-        text: List[str],
-        target_image_embeds: torch.Tensor,
+        text_ids: List[str],
+        attention_mask: List[str],
         image: Optional[torch.Tensor] = None,
         placeholder: str = "[<IMG_PLH>]",
     ) -> torch.Tensor:
         IMAGE, BOI = self.decoder.tokenizer.convert_tokens_to_ids(["<image>", "[IMG]"])
         device = self.ln_visual.weight.device
 
-        # print_gpu_utilization()
         if image is not None:
             # image placeholder is already injected into text prompt
             prompt_image_embeds = self.visual.forward_features(image)
             prompt_image_embeds = self.ln_visual(prompt_image_embeds)
             prompt_image_embeds = self.cformer(prompt_image_embeds)
             prompt_image_embeds = prompt_image_embeds.view(-1, prompt_image_embeds.shape[-1])
-
-        text = [t.replace(placeholder, self.image_placeholder) for t in text]
-        # print("text", text)
-        # print_gpu_utilization()
-
-        for num_img_token in range(self.n_causal + 1):
-            # print(num_img_token)
-            # print_gpu_utilization()
-            if num_img_token == 0:
-                text = [f"{t}[IMG]" for t in text]
-            else:
-                text = [f"{t}<image>" for t in text]
-        # print("text", text)
-
-        # print_gpu_utilization()
-        inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
-        # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
-        attention_mask = inputs.attention_mask.to(device)
-        input_ids = inputs.input_ids.to(device)
-        # print("input_ids", input_ids.shape, input_ids)
-
-        # print_gpu_utilization()
-        text_embeds = self.decoder.lm.model.embed_tokens(input_ids)
-        # print("text_embs", text_embeds.shape, text_embeds.mean(-1))
-
-        image_idx = input_ids == IMAGE
-        cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
-        if image is not None:
-            prompt_idx = torch.logical_and(image_idx, cumsum_idx > (self.n_causal))
-            text_embeds[prompt_idx] = prompt_image_embeds
-
-        # print_gpu_utilization()
-        if target_image_embeds is not None:
-            target_idx = torch.logical_and(image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= (self.n_causal)))
-            text_embeds[target_idx] = target_image_embeds
-            # print("initial_target_idx", target_idx)
-            # print("text_embs_with_img", text_embeds.shape, text_embeds.mean(-1))
-
-        # print_gpu_utilization()
-
-        # print(text_embeds.shape, attention_mask.shape)
-        outputs = self.decoder.lm.model(
-            inputs_embeds=text_embeds,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-
-        # print_gpu_utilization()
-        image_idx = (input_ids == IMAGE) + (input_ids == BOI)
-        cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
-        target_idx = torch.logical_and(image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= (self.n_causal + 1)))
-        # print("final_target_idx", target_idx)
-
-        # print_gpu_utilization()
-        hidden_states = outputs.hidden_states[-1]
-        target_image_embeds = hidden_states[target_idx]
-        target_image_embeds = target_image_embeds[:-1, :]
-        target_image_embeds = target_image_embeds.view(-1, target_image_embeds.shape[-1])
-        target_image_embeds = target_image_embeds.type(self.decoder.lm.stu_regress_head.weight.dtype)
-        target_image_embeds = self.decoder.lm.stu_regress_head(target_image_embeds)
-        # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
-        # exit()
-
-        _, C = target_image_embeds.shape
-        B = hidden_states.shape[0]
-        target_image_embeds = target_image_embeds.view(B, -1, C)
-
-        return target_image_embeds
-
-    # @torch.no_grad()
-    def generate_image_efficient(
-        self,
-        text: List[str],
-        image: Optional[torch.Tensor] = None,
-        placeholder: str = "[<IMG_PLH>]",
-    ) -> torch.Tensor:
-        IMAGE, BOI = self.decoder.tokenizer.convert_tokens_to_ids(["<image>", "[IMG]"])
-        device = self.ln_visual.weight.device
-
-        # print_gpu_utilization()
-        if image is not None:
-            # image placeholder is already injected into text prompt
-            prompt_image_embeds = self.visual.forward_features(image)
-            prompt_image_embeds = self.ln_visual(prompt_image_embeds)
-            prompt_image_embeds = self.cformer(prompt_image_embeds)
-            prompt_image_embeds = prompt_image_embeds.view(-1, prompt_image_embeds.shape[-1])
-
-        text = [t.replace(placeholder, self.image_placeholder) for t in text]
-        # print_gpu_utilization()
 
         target_image_embeds = None
-        text = [f"{t}[IMG]" for t in text]
-        self.decoder.tokenizer.model_max_length = 128
-        inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
-
         for num_img_token in range(self.n_causal):
-            print(num_img_token)
 
-            print_gpu_utilization()
-            # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
+            inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
             attention_mask = inputs.attention_mask.to(device)
             input_ids = inputs.input_ids.to(device)
 
-            print_gpu_utilization()
             text_embeds = self.decoder.lm.model.embed_tokens(input_ids)
-            # print("text_embs", text_embeds.shape, text_embeds.mean(-1))
 
             image_idx = input_ids == IMAGE
             cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
@@ -345,57 +230,38 @@ class Emu(nn.Module, PredictClassMixin):
                 prompt_idx = torch.logical_and(image_idx, cumsum_idx > num_img_token)
                 text_embeds[prompt_idx] = prompt_image_embeds
 
-            print_gpu_utilization()
             if target_image_embeds is not None:
                 target_idx = torch.logical_and(
                     image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token)
                 )
                 text_embeds[target_idx] = target_image_embeds
-                # print("initial_target_idx", target_idx)
-                # print("text_embs_with_img", text_embeds.shape, text_embeds.mean(-1))
 
-            print_gpu_utilization()
-
-            # print(text_embeds.shape, attention_mask.shape)
             outputs = self.decoder.lm.model(
                 inputs_embeds=text_embeds,
                 attention_mask=attention_mask,
-                output_hidden_states=False,
+                output_hidden_states=True,
                 return_dict=True,
-                use_cache=False,
             )
 
-            print_gpu_utilization()
             image_idx = (input_ids == IMAGE) + (input_ids == BOI)
             cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
             target_idx = torch.logical_and(
                 image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token + 1)
             )
-            # print("final_target_idx", target_idx)
 
-            print_gpu_utilization()
-            hidden_states = outputs.last_hidden_state
-            # print("hidden_states", hidden_states.shape, hidden_states.mean(-1))
+            hidden_states = outputs.hidden_states[-1]
             target_image_embeds = hidden_states[target_idx]
-            # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
             target_image_embeds = target_image_embeds.view(-1, target_image_embeds.shape[-1])
             target_image_embeds = target_image_embeds.type(self.decoder.lm.stu_regress_head.weight.dtype)
             target_image_embeds = self.decoder.lm.stu_regress_head(target_image_embeds)
-            # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
-            print_gpu_utilization()
-            del outputs
-            if num_img_token < self.n_causal - 1:
-                del hidden_states
-            torch.cuda.empty_cache()
 
         _, C = target_image_embeds.shape
         B = hidden_states.shape[0]
         target_image_embeds = target_image_embeds.view(B, -1, C)
-        # print_gpu_utilization()
 
         return target_image_embeds
 
-    # @torch.no_grad()
+    @torch.no_grad()
     def generate_image(
         self,
         text: List[str],
@@ -405,7 +271,6 @@ class Emu(nn.Module, PredictClassMixin):
         IMAGE, BOI = self.decoder.tokenizer.convert_tokens_to_ids(["<image>", "[IMG]"])
         device = self.ln_visual.weight.device
 
-        # print_gpu_utilization()
         if image is not None:
             # image placeholder is already injected into text prompt
             prompt_image_embeds = self.visual.forward_features(image)
@@ -414,27 +279,19 @@ class Emu(nn.Module, PredictClassMixin):
             prompt_image_embeds = prompt_image_embeds.view(-1, prompt_image_embeds.shape[-1])
 
         text = [t.replace(placeholder, self.image_placeholder) for t in text]
-        # print_gpu_utilization()
 
         target_image_embeds = None
         for num_img_token in range(self.n_causal):
-            print(num_img_token)
-            print_gpu_utilization()
             if num_img_token == 0:
                 text = [f"{t}[IMG]" for t in text]
             else:
                 text = [f"{t}<image>" for t in text]
 
-            # print_gpu_utilization()
-            self.decoder.tokenizer.model_max_length = 64
             inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
-            # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
             attention_mask = inputs.attention_mask.to(device)
             input_ids = inputs.input_ids.to(device)
 
-            # print_gpu_utilization()
             text_embeds = self.decoder.lm.model.embed_tokens(input_ids)
-            # print("text_embs", text_embeds.shape, text_embeds.mean(-1))
 
             image_idx = input_ids == IMAGE
             cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
@@ -442,52 +299,33 @@ class Emu(nn.Module, PredictClassMixin):
                 prompt_idx = torch.logical_and(image_idx, cumsum_idx > num_img_token)
                 text_embeds[prompt_idx] = prompt_image_embeds
 
-            # print_gpu_utilization()
             if target_image_embeds is not None:
                 target_idx = torch.logical_and(
                     image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token)
                 )
                 text_embeds[target_idx] = target_image_embeds
-                # print("initial_target_idx", target_idx)
-                # print("text_embs_with_img", text_embeds.shape, text_embeds.mean(-1))
 
-            # print_gpu_utilization()
-
-            # print(text_embeds.shape, attention_mask.shape)
             outputs = self.decoder.lm.model(
                 inputs_embeds=text_embeds,
                 attention_mask=attention_mask,
-                output_hidden_states=False,
+                output_hidden_states=True,
                 return_dict=True,
-                use_cache=False,
             )
 
-            # print_gpu_utilization()
             image_idx = (input_ids == IMAGE) + (input_ids == BOI)
             cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
             target_idx = torch.logical_and(
                 image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token + 1)
             )
-            # print("final_target_idx", target_idx)
 
-            # print_gpu_utilization()
-            hidden_states = outputs.last_hidden_state
-            # print("hidden_states", hidden_states.shape, hidden_states.mean(-1))
+            hidden_states = outputs.hidden_states[-1]
             target_image_embeds = hidden_states[target_idx]
-            # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
             target_image_embeds = target_image_embeds.view(-1, target_image_embeds.shape[-1])
             target_image_embeds = target_image_embeds.type(self.decoder.lm.stu_regress_head.weight.dtype)
             target_image_embeds = self.decoder.lm.stu_regress_head(target_image_embeds)
-            # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
-            # print_gpu_utilization()
-            del outputs
-            if num_img_token < self.n_causal - 1:
-                del hidden_states
-            torch.cuda.empty_cache()
 
         _, C = target_image_embeds.shape
         B = hidden_states.shape[0]
         target_image_embeds = target_image_embeds.view(B, -1, C)
-        # print_gpu_utilization()
 
         return target_image_embeds

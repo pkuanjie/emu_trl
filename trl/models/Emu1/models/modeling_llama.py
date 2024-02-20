@@ -138,7 +138,7 @@ class LLaMAForClsAndRegression(nn.Module):
 
         self.tokenizer = transformers.LlamaTokenizer.from_pretrained(
             model_name_or_path,
-            model_max_length=2048,
+            model_max_length=256,
             padding_side="right",
             truncation=True,
             use_fast=False,

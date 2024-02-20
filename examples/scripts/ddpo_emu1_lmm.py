@@ -37,7 +37,7 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
 
-from trl import DDPOConfig, DDPOEmu1Trainer, DefaultDDPOStableDiffusionPipeline, DefaultDDPOEmu1Pipeline
+from trl import DDPOConfig, DDPOEmu1LMMTrainer, DefaultDDPOStableDiffusionPipeline, DefaultDDPOEmu1LMMPipeline
 from trl.import_utils import is_npu_available, is_xpu_available
 
 
@@ -136,33 +136,34 @@ def aesthetic_scorer(hub_model_id, model_filename):
 
 # list of example prompts to feed stable diffusion
 animals = [
-    "cat",
-    "dog",
-    "horse",
-    "monkey",
-    "rabbit",
-    "zebra",
-    "spider",
-    "bird",
-    "sheep",
-    "deer",
-    "cow",
-    "goat",
-    "lion",
-    "frog",
-    "chicken",
-    "duck",
-    "goose",
-    "bee",
-    "pig",
-    "turkey",
-    "fly",
-    "llama",
-    "camel",
-    "bat",
-    "gorilla",
-    "hedgehog",
-    "kangaroo",
+    # "cat",
+    # "dog",
+    # "horse",
+    # "monkey",
+    # "rabbit",
+    # "zebra",
+    # "spider",
+    # "bird",
+    # "sheep",
+    # "deer",
+    # "cow",
+    # "goat",
+    # "lion",
+    # "frog",
+    # "chicken",
+    # "duck",
+    # "goose",
+    # "bee",
+    # "pig",
+    # "turkey",
+    # "fly",
+    # "llama",
+    # "camel",
+    # "bat",
+    # "gorilla",
+    # "hedgehog",
+    # "kangaroo",
+    "cat playing with a dog in the snow in winter, with a snowman in the background",
 ]
 
 
@@ -216,17 +217,13 @@ if __name__ == "__main__":
         "total_limit": 5,
         "project_dir": "./save_emu1",
     }
-    print(args)
-    print("----------------------------------")
-    print(ddpo_config)
-    exit()
 
     # remove the project directory if it exists so that it will not cause issues
     os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")
 
-    pipeline = DefaultDDPOEmu1Pipeline(args.pretrained_model, use_lora=args.use_lora)
+    pipeline = DefaultDDPOEmu1LMMPipeline(args.pretrained_model, use_lora=args.use_lora)
 
-    trainer = DDPOEmu1Trainer(
+    trainer = DDPOEmu1LMMTrainer(
         ddpo_config,
         aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
         prompt_fn,
