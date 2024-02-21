@@ -640,7 +640,7 @@ class DefaultDDPOEmu1LMMPipeline(DDPOEmu1LMMPipeline):
     def get_trainable_layers(self):
         if self.use_lora:
             lora_config = LoraConfig(
-                r=1,
+                r=16,
                 lora_alpha=32,
                 lora_dropout=0.05,
                 bias="none",

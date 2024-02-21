@@ -655,14 +655,30 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
     def get_prompt_embeds(self, prompt_batch, negative_prompt_key=""):
 
         batch_size = len(prompt_batch)
-        print_gpu_utilization()
-        neg_prompt_embed = self.sd_pipeline.emu_encoder.generate_image([negative_prompt_key])
-        print_gpu_utilization()
-        sample_neg_prompt_embeds = neg_prompt_embed.repeat(batch_size, 1, 1)
-        print_gpu_utilization()
-        sample_prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompt_batch)
-        print_gpu_utilization()
-        exit()
+        # print_gpu_utilization()
+        with torch.no_grad():
+            neg_prompt_embed = self.sd_pipeline.emu_encoder.generate_image([negative_prompt_key], 64)
+            # print_gpu_utilization()
+            sample_neg_prompt_embeds = neg_prompt_embed.repeat(batch_size, 1, 1)
+        # print_gpu_utilization()
+        sample_prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompt_batch, 64)
+        # print_gpu_utilization()
+        # exit()
+
+        return sample_neg_prompt_embeds, sample_prompt_embeds
+
+    def get_prompt_embeds_efficient(self, prompt_batch, negative_prompt_key=""):
+
+        batch_size = len(prompt_batch)
+        # print_gpu_utilization()
+        with torch.no_grad():
+            neg_prompt_embed = self.sd_pipeline.emu_encoder.generate_image_efficient([negative_prompt_key], 64)
+            # print_gpu_utilization()
+            sample_neg_prompt_embeds = neg_prompt_embed.repeat(batch_size, 1, 1)
+        # print_gpu_utilization()
+        sample_prompt_embeds = self.sd_pipeline.emu_encoder.generate_image_efficient(prompt_batch, 64)
+        # print_gpu_utilization()
+        # exit()
 
         return sample_neg_prompt_embeds, sample_prompt_embeds
 
@@ -671,12 +687,13 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
     ):
 
         batch_size = len(prompt_batch)
-        sample_prompt_embeds = self.sd_pipeline.emu_encoder.teacher_forcing(prompt_batch, gt_prompt_embeds)
+        sample_prompt_embeds = self.sd_pipeline.emu_encoder.teacher_forcing(prompt_batch, gt_prompt_embeds, 256)
         # sample_prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompt_batch)
-        neg_prompt_embed = self.sd_pipeline.emu_encoder.teacher_forcing(
-            [negative_prompt_key], gt_negative_prompt_embeds
-        )
-        sample_neg_prompt_embeds = neg_prompt_embed.repeat(batch_size, 1, 1)
+        with torch.no_grad():
+            neg_prompt_embed = self.sd_pipeline.emu_encoder.teacher_forcing(
+                [negative_prompt_key], gt_negative_prompt_embeds, 256
+            )
+            sample_neg_prompt_embeds = neg_prompt_embed.repeat(batch_size, 1, 1)
 
         return sample_neg_prompt_embeds, sample_prompt_embeds
 
@@ -705,52 +722,47 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
             if self.accelerator.is_main_process:
                 log_with_time(f"Training batched samples: {i}/{len(batched_samples)}")
 
-            # neg_prompt_embeds, prompt_embeds = self.get_prompt_embeds_teacher_forcing(
-            #     samples_prompts_batched[i],
-            #     batched_samples[i]["prompt_embeds"],
-            #     batched_samples[i]["negative_prompt_embeds"],
-            # )
-            neg_prompt_embeds, prompt_embeds = self.get_prompt_embeds(
-                samples_prompts_batched[i],
-            )
-            print("=" * 50)
-            print(samples_prompts_batched[i])
-            print("original", batched_samples[i]["prompt_embeds"].mean(-1))
-            print("teacher forcing", prompt_embeds.mean(-1))
-            print("original", batched_samples[i]["negative_prompt_embeds"].mean(-1))
-            print("teacher forcing", neg_prompt_embeds.mean(-1))
-            print("=" * 50)
-            exit()
-
-            if self.config.train_cfg:
-                # concat negative prompts to sample prompts to avoid two forward passes
-
-                # if self.accelerator.is_main_process:
-                #     print("============================")
-                #     print(f"neg_prompt_embeds")
-                #     print(neg_prompt_embeds.shape)
-                #     print(neg_prompt_embeds)
-                #     print("-" * 50)
-                #     print(f"neg_prompt_embeds, gt")
-                #     print(sample["negative_prompt_embeds"].shape)
-                #     print(sample["negative_prompt_embeds"])
-                #     print("-" * 50)
-                #     print(f"prompt_embeds")
-                #     print(prompt_embeds.shape)
-                #     print(prompt_embeds)
-                #     print("-" * 50)
-                #     print(f"prompt_embeds, gt")
-                #     print(sample["prompt_embeds"].shape)
-                #     print(sample["prompt_embeds"])
-                #     print("============================")
-                #     print_gpu_utilization()
-                #     exit()
-                embeds = torch.cat([neg_prompt_embeds, prompt_embeds])
-            else:
-                embeds = prompt_embeds
-
             for j in range(self.num_train_timesteps):
                 with self.accelerator.accumulate(self.sd_pipeline.emu_encoder):
+                    # neg_prompt_embeds, prompt_embeds = self.get_prompt_embeds_teacher_forcing(
+                    #     samples_prompts_batched[i],
+                    #     batched_samples[i]["prompt_embeds"],
+                    #     batched_samples[i]["negative_prompt_embeds"],
+                    # )
+                    neg_prompt_embeds, prompt_embeds = self.get_prompt_embeds_efficient(
+                        samples_prompts_batched[i],
+                    )
+                    # neg_prompt_embeds, prompt_embeds = self.get_prompt_embeds(
+                    #     samples_prompts_batched[i],
+                    # )
+
+                    if self.config.train_cfg:
+                        # concat negative prompts to sample prompts to avoid two forward passes
+
+                        # if self.accelerator.is_main_process:
+                        #     print("============================")
+                        #     print(f"neg_prompt_embeds")
+                        #     print(neg_prompt_embeds.shape)
+                        #     print(neg_prompt_embeds)
+                        #     print("-" * 50)
+                        #     print(f"neg_prompt_embeds, gt")
+                        #     print(sample["negative_prompt_embeds"].shape)
+                        #     print(sample["negative_prompt_embeds"])
+                        #     print("-" * 50)
+                        #     print(f"prompt_embeds")
+                        #     print(prompt_embeds.shape)
+                        #     print(prompt_embeds)
+                        #     print("-" * 50)
+                        #     print(f"prompt_embeds, gt")
+                        #     print(sample["prompt_embeds"].shape)
+                        #     print(sample["prompt_embeds"])
+                        #     print("============================")
+                        #     print_gpu_utilization()
+                        #     exit()
+                        embeds = torch.cat([neg_prompt_embeds, prompt_embeds])
+                    else:
+                        embeds = prompt_embeds
+
                     loss, approx_kl, clipfrac = self.calculate_loss(
                         sample["latents"][:, j],
                         sample["timesteps"][:, j],
@@ -763,7 +775,6 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
                     info["approx_kl"].append(approx_kl)
                     info["clipfrac"].append(clipfrac)
                     info["loss"].append(loss)
-                    bp()
 
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
@@ -787,8 +798,6 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
                     self.accelerator.log(info, step=global_step)
                     global_step += 1
                     info = defaultdict(list)
-                print("success")
-                exit()
         return global_step
 
     def _config_check(self) -> Tuple[bool, str]:

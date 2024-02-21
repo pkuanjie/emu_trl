@@ -218,6 +218,7 @@ class Emu(nn.Module, PredictClassMixin):
         self,
         text: List[str],
         target_image_embeds: torch.Tensor,
+        max_token_length: int = 256,
         image: Optional[torch.Tensor] = None,
         placeholder: str = "[<IMG_PLH>]",
     ) -> torch.Tensor:
@@ -246,6 +247,7 @@ class Emu(nn.Module, PredictClassMixin):
         # print("text", text)
 
         # print_gpu_utilization()
+        self.decoder.tokenizer.model_max_length = max_token_length
         inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
         # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
         attention_mask = inputs.attention_mask.to(device)
@@ -305,6 +307,7 @@ class Emu(nn.Module, PredictClassMixin):
     def generate_image_efficient(
         self,
         text: List[str],
+        max_token_length: int = 64,
         image: Optional[torch.Tensor] = None,
         placeholder: str = "[<IMG_PLH>]",
     ) -> torch.Tensor:
@@ -322,39 +325,61 @@ class Emu(nn.Module, PredictClassMixin):
         text = [t.replace(placeholder, self.image_placeholder) for t in text]
         # print_gpu_utilization()
 
-        target_image_embeds = None
+        # =====================================
+        # move from loop out to here
+        # print(num_img_token)
+        # print_gpu_utilization()
+        # if num_img_token == 0:
         text = [f"{t}[IMG]" for t in text]
-        self.decoder.tokenizer.model_max_length = 128
+        # else:
+        #     text = [f"{t}<image>" for t in text]
+        if image is not None:
+            for _ in range(prompt_image_embeds.shape[0]):
+                text = [f"{t}<image>" for t in text]
+
+        # print_gpu_utilization()
+        if image is not None:
+            self.decoder.tokenizer.model_max_length = 64
+        else:
+            self.decoder.tokenizer.model_max_length = 32
+        self.decoder.tokenizer.padding_side = "left"
         inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
+        # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
+        attention_mask = inputs.attention_mask.to(device)
+        input_ids = inputs.input_ids.to(device)
+
+        # print_gpu_utilization()
+        text_embeds = self.decoder.lm.model.embed_tokens(input_ids)
+        # print("text_embs", text_embeds.shape, text_embeds.mean(-1))
+
+        image_idx = input_ids == IMAGE
+        cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
+        if image is not None:
+            prompt_idx = torch.logical_and(image_idx, cumsum_idx > num_img_token)
+            text_embeds[prompt_idx] = prompt_image_embeds
+        # =====================================
+
+        target_image_embeds = None
+
+        target_idx_before = torch.zeros_like(image_idx)
+        target_idx_after = torch.zeros_like(image_idx)
+        target_idx_after[:, -1] = 1
 
         for num_img_token in range(self.n_causal):
-            print(num_img_token)
 
-            print_gpu_utilization()
-            # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
-            attention_mask = inputs.attention_mask.to(device)
-            input_ids = inputs.input_ids.to(device)
-
-            print_gpu_utilization()
-            text_embeds = self.decoder.lm.model.embed_tokens(input_ids)
-            # print("text_embs", text_embeds.shape, text_embeds.mean(-1))
-
-            image_idx = input_ids == IMAGE
-            cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
-            if image is not None:
-                prompt_idx = torch.logical_and(image_idx, cumsum_idx > num_img_token)
-                text_embeds[prompt_idx] = prompt_image_embeds
-
-            print_gpu_utilization()
+            # text_embeds shape: 1 x 32 x 5120
+            # print(num_img_token)
+            # print_gpu_utilization()
             if target_image_embeds is not None:
-                target_idx = torch.logical_and(
-                    image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token)
-                )
-                text_embeds[target_idx] = target_image_embeds
+                text_embeds = torch.cat([text_embeds, torch.ones_like(text_embeds[:, 0:1, :])], dim=1)
+                attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, 0:1])], dim=1)
+                target_idx_before = torch.cat([target_idx_before, torch.ones_like(target_idx_before[:, 0:1])], dim=1)
+                target_idx_after = torch.cat([target_idx_after, torch.ones_like(target_idx_after[:, 0:1])], dim=1)
+                text_embeds[target_idx_before] = target_image_embeds
                 # print("initial_target_idx", target_idx)
                 # print("text_embs_with_img", text_embeds.shape, text_embeds.mean(-1))
 
-            print_gpu_utilization()
+            # print_gpu_utilization()
 
             # print(text_embeds.shape, attention_mask.shape)
             outputs = self.decoder.lm.model(
@@ -365,32 +390,27 @@ class Emu(nn.Module, PredictClassMixin):
                 use_cache=False,
             )
 
-            print_gpu_utilization()
-            image_idx = (input_ids == IMAGE) + (input_ids == BOI)
-            cumsum_idx = torch.flip(torch.cumsum(torch.flip(image_idx, dims=[1]), dim=1), dims=[1])
-            target_idx = torch.logical_and(
-                image_idx, torch.logical_and(cumsum_idx > 0, cumsum_idx <= num_img_token + 1)
-            )
-            # print("final_target_idx", target_idx)
+            # print_gpu_utilization()
 
-            print_gpu_utilization()
-            hidden_states = outputs.last_hidden_state
+            # print_gpu_utilization()
+            hidden_states = outputs.last_hidden_state  # 1 x 32 x 5120
             # print("hidden_states", hidden_states.shape, hidden_states.mean(-1))
-            target_image_embeds = hidden_states[target_idx]
+            target_image_embeds = hidden_states[target_idx_after]  # 1 x 5120
             # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
             target_image_embeds = target_image_embeds.view(-1, target_image_embeds.shape[-1])
             target_image_embeds = target_image_embeds.type(self.decoder.lm.stu_regress_head.weight.dtype)
             target_image_embeds = self.decoder.lm.stu_regress_head(target_image_embeds)
+            target_image_embeds = target_image_embeds.view(
+                target_idx_after.shape[0], -1, target_image_embeds.shape[-1]
+            )
             # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
-            print_gpu_utilization()
+            # print_gpu_utilization()
             del outputs
             if num_img_token < self.n_causal - 1:
                 del hidden_states
             torch.cuda.empty_cache()
 
-        _, C = target_image_embeds.shape
-        B = hidden_states.shape[0]
-        target_image_embeds = target_image_embeds.view(B, -1, C)
+        # print(target_image_embeds.shape)
         # print_gpu_utilization()
 
         return target_image_embeds
@@ -399,6 +419,7 @@ class Emu(nn.Module, PredictClassMixin):
     def generate_image(
         self,
         text: List[str],
+        max_token_length: int = 64,
         image: Optional[torch.Tensor] = None,
         placeholder: str = "[<IMG_PLH>]",
     ) -> torch.Tensor:
@@ -418,15 +439,15 @@ class Emu(nn.Module, PredictClassMixin):
 
         target_image_embeds = None
         for num_img_token in range(self.n_causal):
-            print(num_img_token)
-            print_gpu_utilization()
+            # print(num_img_token)
+            # print_gpu_utilization()
             if num_img_token == 0:
                 text = [f"{t}[IMG]" for t in text]
             else:
                 text = [f"{t}<image>" for t in text]
 
             # print_gpu_utilization()
-            self.decoder.tokenizer.model_max_length = 64
+            self.decoder.tokenizer.model_max_length = max_token_length
             inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
             # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
             attention_mask = inputs.attention_mask.to(device)

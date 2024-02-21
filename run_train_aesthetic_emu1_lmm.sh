@@ -3,7 +3,7 @@ export NCCL_DEBUG=INFO
 ACCELERATE_CONFIG='./accelerate_config_1gpu.yaml'
 # ACCELERATE_CONFIG='./ds_config_1gpu.yaml'
 accelerate  launch --config_file $ACCELERATE_CONFIG examples/scripts/ddpo_emu1_lmm.py \
-    --num_epochs=400 \
+    --num_epochs=2 \
     --train_gradient_accumulation_steps=1 \
     --sample_num_steps=5\
     --sample_batch_size=1 \
