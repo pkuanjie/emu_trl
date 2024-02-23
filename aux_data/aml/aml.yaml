@@ -1,0 +1,100 @@
+azure_blob_config_file: null # no need to specify, legacy option
+datastore_name: null # no need to specify. legacy option
+# used to initialize the workspace
+aml_config: ./aux_data/aml/config_a100.json
+# aml_config: ./aux_data/aml/config-vision-sing-acv-ws01-westus2.json
+
+# the following is related with the job submission. If you don't use the
+# submission utility here, you can set any value
+
+config_param: 
+   code_path:
+       azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml
+   # the blob account information
+       path: jan/repos/dummy_job/dummy_job.zip # where the zipped source code is
+   # you can add multiple key-value pairs to configure the folder mapping.
+   # Locally, if the folder name is A, and you want A to be a blobfuse
+   # folder in the AML side, you need to set the key as A_folder. For
+   # example, if the local folder is datasets, and you want datasets to be a
+   # blobfuse folder in AML running, then add a pair with the key being
+   # datasets_folder.
+   # models_folder:
+   #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+   #     # after the source code is unzipped, this folder will be as $ROOT/models
+   #     path: jan/repos/adversarial_diffusion/models
+   # logs_folder:
+   #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+   #     # after the source code is unzipped, this folder will be as $ROOT/models
+   #     path: jan/repos/adversarial_diffusion/logs
+   # data_folder:
+   #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+   #     # after the source code is unzipped, this folder will be as $ROOT/data
+   #     path: jan/repos/adversarial_diffusion/data
+   # ffhq_folder:
+   #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+   #     # after the source code is unzipped, this folder will be as $ROOT/data
+   #     path: jan/datasets
+   # outputs_folder:
+   #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+   #     path: jan/repos/adversarial_diffusion/outputs # this folder will be as $ROOT/outputs
+# if False, it will use AML's PyTorch estimator, which is not heavily tested here
+use_custom_docker: true
+# compute target should be the virtual cluster name if it is singularity
+# compute_target: Training
+# compute_target: A100-4GPU-80GB-west3
+compute_target: A100-8GPU-80GB
+# compute_target: vsn-sing-acv-wu2
+
+# the value of platform can be aml or itp or singularity.
+# platform: singularity
+#
+docker:
+    # the custom docker. If use_custom_docker is False, this will be ignored
+    image: pkuanjie/ldm:0.2.1
+    # image: pkuanjie/ldm:0.5
+    'username': pkuanjie
+    'password': Anjie930728
+# any name to specify the experiment name.
+# better to have alias name as part of the experiment name since experiment
+# cannot be deleted and it is better to use fewer experiments
+experiment_name: job_never_fail
+# if it is true, you need to run az login --use-device to authorize
+# before job submission. If you don't set it (default), it will prompt website to ask
+# you to do the authentication. It is recommmended to set it as True
+use_cli_auth: True
+# if it is true, it will spawn n processes on each node. n equals #gpu on
+# the node. otherwise, there will be only 1 process on each node. In
+# distributed training, if it is false, you might need to spawn n extra
+# processes by yourself. It is recommended to set it as true (default)
+multi_process: True
+gpu_per_node: 8
+# set it as true if you'd like to submit the job as P type, which is
+# preemptible
+preemption_allowed: false
+# uncomment the following to specify the python path explicitly
+# interpreter_path: /opt/conda/bin/python
+env:
+   # the dictionary of env will be as extra environment variables for the
+   # job running. you can add multiple env here. Sometimes, the default
+   # of NCCL_IB_DISABLE is '1', which will disable IB. Highly recommneded to
+   # alwasy set it as '0', even when IB is not available.
+   NCCL_IB_DISABLE: '0'
+# optionally, you can specify the option for zip command, which is used by
+# a init to compress the source folder and to upload it.
+zip_options:
+    - '-x'
+    - '\*.git\*'
+    - '-x'
+    - '\*taming-transformers/data/\*'
+    - '-x'
+    - '\*results\*'
+    - '-x'
+    - 'dataset/\*'
+    - '-x'
+    - 'models/\*'
+    - '-x'
+    - 'data/\*'
+    - '-x'
+    - 'logs/\*'
+    - '-x'
+    - 'ffhq/\*'

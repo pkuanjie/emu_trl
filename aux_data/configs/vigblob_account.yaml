@@ -1,0 +1,5 @@
+datastore_name: blob
+account_name: vigstandard
+account_key: hK5hbaXS19jVYboWl/yvcHL2eWrBbOfpLf8SZhbBrtrecXmMpVc5Ho489y0MPCSDqAZA9QzrO+ISXNQsghENRg==
+sas_token: ?sv=2021-10-04&st=2023-08-17T03%3A06%3A31Z&se=2025-08-18T03%3A06%3A00Z&sr=c&sp=racwdl&sig=iqq2q5xYoYPeBpb0X1i2ft8WaJGZJHeQCjFdixAylpY%3D
+container_name: data
