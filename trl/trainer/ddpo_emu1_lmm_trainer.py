@@ -320,6 +320,18 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
             # processing the remaining keys
             samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys() if k != "prompts"}
 
+            # print("-------------------")
+            # self.accelerator.wait_for_everyone()
+            # new_samples = {}
+            # for key in samples[0].keys():
+            #     print(f"key: {key}")
+            #     if key != "prompts":
+            #         for i in range(len(samples)):
+            #             print(f"i: {i} | shape: {samples[i][key].shape}")
+            #         new_samples[key] = torch.cat([s[key] for s in samples])
+            # samples = new_samples
+            # print("-------------------")
+
             rewards, rewards_metadata = self.compute_rewards(
                 prompt_image_data, is_async=self.config.async_reward_computation
             )
@@ -410,76 +422,6 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
             self.accelerator.save_state()
 
         return global_step
-
-    def calculate_ppo_loss(self, latents, timesteps, next_latents, log_probs, advantages, embeds, unet_conditions):
-        """
-        Calculate the loss for a batch of an unpacked sample
-
-        Args:
-            latents (torch.Tensor):
-                The latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
-            timesteps (torch.Tensor):
-                The timesteps sampled from the diffusion model, shape: [batch_size]
-            next_latents (torch.Tensor):
-                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
-            log_probs (torch.Tensor):
-                The log probabilities of the latents, shape: [batch_size]
-            advantages (torch.Tensor):
-                The advantages of the latents, shape: [batch_size]
-            embeds (torch.Tensor):
-                The embeddings of the prompts, shape: [2*batch_size or batch_size, ...]
-                Note: the "or" is because if train_cfg is True, the expectation is that negative prompts are concatenated to the embeds
-
-        Returns:
-            loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor)
-            (all of these are of shape (1,))
-        """
-        with self.autocast():
-            if self.config.train_cfg:
-                noise_pred = self.sd_pipeline.unet(
-                    torch.cat([latents] * 2),
-                    torch.cat([timesteps] * 2),
-                    encoder_hidden_states=embeds,
-                    cross_attention_kwargs=unet_conditions[0],
-                ).sample
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + self.config.sample_guidance_scale * (
-                    noise_pred_text - noise_pred_uncond
-                )
-            else:
-                noise_pred = self.sd_pipeline.unet(
-                    latents,
-                    timesteps,
-                    encoder_hidden_states=embeds,
-                    cross_attention_kwargs=unet_conditions[0],
-                ).sample
-            # compute the log prob of next_latents given latents under the current model
-
-            scheduler_step_output = self.sd_pipeline.scheduler_step(
-                noise_pred,
-                timesteps,
-                latents,
-                eta=self.config.sample_eta,
-                prev_sample=next_latents,
-            )
-
-            log_prob = scheduler_step_output.log_probs
-
-        advantages = torch.clamp(
-            advantages,
-            -self.config.train_adv_clip_max,
-            self.config.train_adv_clip_max,
-        )
-
-        ratio = torch.exp(log_prob - log_probs)
-
-        loss = self.loss(advantages, self.config.train_clip_range, ratio)
-
-        approx_kl = 0.5 * torch.mean((log_prob - log_probs) ** 2)
-
-        clipfrac = torch.mean((torch.abs(ratio - 1.0) > self.config.train_clip_range).float())
-
-        return loss, approx_kl, clipfrac
 
     def calculate_loss(self, latents, timesteps, next_latents, log_probs, advantages, embeds, unet_conditions):
         """
@@ -601,6 +543,7 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
         Returns:
             samples (List[Dict[str, torch.Tensor]]), prompt_image_pairs (List[List[Any]])
         """
+        max_token_length = 64
         samples = []
         prompt_image_pairs = []
         self.sd_pipeline.emu_encoder.eval()
@@ -612,10 +555,11 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
                 log_with_time(f"Generating samples: {s_idx}/{iterations}")
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
 
+            self.sd_pipeline.tokenizer.model_max_length = max_token_length
             prompt_output = self.sd_pipeline.tokenizer(prompts, padding="max_length", return_tensors="pt")
             prompt_ids = prompt_output.input_ids.to(self.accelerator.device)
             attention_mask = prompt_output.attention_mask.to(self.accelerator.device)
-            prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompts)
+            prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompts, max_token_length=max_token_length)
 
             with self.autocast():
                 sd_output, unet_conditions = self.sd_pipeline(
@@ -723,7 +667,8 @@ class DDPOEmu1LMMTrainer(BaseTrainer):
                 log_with_time(f"Training batched samples: {i}/{len(batched_samples)}")
 
             for j in range(self.num_train_timesteps):
-                with self.accelerator.accumulate(self.sd_pipeline.emu_encoder):
+                # log_with_time(f"Training timestep: {j}/{self.num_train_timesteps}")
+                with self.accelerator.accumulate(self.sd_pipeline.emu_encoder.decoder.lm.model):
                     # neg_prompt_embeds, prompt_embeds = self.get_prompt_embeds_teacher_forcing(
                     #     samples_prompts_batched[i],
                     #     batched_samples[i]["prompt_embeds"],

@@ -400,9 +400,6 @@ class Emu(nn.Module, PredictClassMixin):
             target_image_embeds = target_image_embeds.view(-1, target_image_embeds.shape[-1])
             target_image_embeds = target_image_embeds.type(self.decoder.lm.stu_regress_head.weight.dtype)
             target_image_embeds = self.decoder.lm.stu_regress_head(target_image_embeds)
-            target_image_embeds = target_image_embeds.view(
-                target_idx_after.shape[0], -1, target_image_embeds.shape[-1]
-            )
             # print("target_image_embeds", target_image_embeds.shape, target_image_embeds.mean(-1))
             # print_gpu_utilization()
             del outputs
@@ -412,6 +409,9 @@ class Emu(nn.Module, PredictClassMixin):
 
         # print(target_image_embeds.shape)
         # print_gpu_utilization()
+        _, C = target_image_embeds.shape
+        B = target_idx_before.shape[0]
+        target_image_embeds = target_image_embeds.view(B, -1, C)
 
         return target_image_embeds
 

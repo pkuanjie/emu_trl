@@ -211,15 +211,11 @@ if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
     args, ddpo_config = parser.parse_args_into_dataclasses()
     ddpo_config.project_kwargs = {
-        "logging_dir": "./logs_emu1",
+        "logging_dir": "./logs_emu1_unet",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
-        "project_dir": "./save_emu1",
+        "project_dir": "./save_emu1_unet",
     }
-    print(args)
-    print("----------------------------------")
-    print(ddpo_config)
-    exit()
 
     # remove the project directory if it exists so that it will not cause issues
     os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")

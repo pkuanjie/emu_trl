@@ -136,34 +136,33 @@ def aesthetic_scorer(hub_model_id, model_filename):
 
 # list of example prompts to feed stable diffusion
 animals = [
-    # "cat",
-    # "dog",
-    # "horse",
-    # "monkey",
-    # "rabbit",
-    # "zebra",
-    # "spider",
-    # "bird",
-    # "sheep",
-    # "deer",
-    # "cow",
-    # "goat",
-    # "lion",
-    # "frog",
-    # "chicken",
-    # "duck",
-    # "goose",
-    # "bee",
-    # "pig",
-    # "turkey",
-    # "fly",
-    # "llama",
-    # "camel",
-    # "bat",
-    # "gorilla",
-    # "hedgehog",
-    # "kangaroo",
-    "cat playing with a dog in the snow in winter, with a snowman in the background",
+    "cat",
+    "dog",
+    "horse",
+    "monkey",
+    "rabbit",
+    "zebra",
+    "spider",
+    "bird",
+    "sheep",
+    "deer",
+    "cow",
+    "goat",
+    "lion",
+    "frog",
+    "chicken",
+    "duck",
+    "goose",
+    "bee",
+    "pig",
+    "turkey",
+    "fly",
+    "llama",
+    "camel",
+    "bat",
+    "gorilla",
+    "hedgehog",
+    "kangaroo",
 ]
 
 
@@ -212,11 +211,12 @@ if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
     args, ddpo_config = parser.parse_args_into_dataclasses()
     ddpo_config.project_kwargs = {
-        "logging_dir": "./logs_emu1",
+        "logging_dir": "./logs_emu1_lmm",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
-        "project_dir": "./save_emu1",
+        "project_dir": "./save_emu1_lmm",
     }
+    ddpo_config.train_timestep_fraction = 0.1
 
     # remove the project directory if it exists so that it will not cause issues
     os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")
