@@ -44,7 +44,7 @@ from trl.import_utils import is_npu_available, is_xpu_available
 @dataclass
 class ScriptArguments:
     pretrained_model: str = field(
-        default="/mnt/repos/emu_trl/emu1_ckpts/models--BAAI--Emu/snapshots/9d5face1ae9d8f5cd5c0ed891dc09e47833d06e1/pretrain/",
+        default="/app/emu_trl/emu1_ckpts/models--BAAI--Emu/snapshots/9d5face1ae9d8f5cd5c0ed891dc09e47833d06e1/pretrain/",
         metadata={"help": "the pretrained model to use"},
     )
     pretrained_revision: str = field(default="main", metadata={"help": "the pretrained model revision to use"})

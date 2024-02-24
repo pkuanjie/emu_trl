@@ -45,6 +45,8 @@ trl/models/__init__.py
 trl/models/emu2_rl.py
 trl/models/modeling_base.py
 trl/models/modeling_emu1_ddpo.py
+trl/models/modeling_emu1_lmm_ddpo.py
+trl/models/modeling_emu1_lmm_unet_ddpo.py
 trl/models/modeling_emu2_ddpo.py
 trl/models/modeling_sd_base.py
 trl/models/modeling_value_head.py
@@ -52,6 +54,8 @@ trl/models/utils.py
 trl/trainer/__init__.py
 trl/trainer/base.py
 trl/trainer/ddpo_config.py
+trl/trainer/ddpo_emu1_lmm_trainer.py
+trl/trainer/ddpo_emu1_lmm_unet_trainer.py
 trl/trainer/ddpo_emu1_trainer.py
 trl/trainer/ddpo_emu2_trainer.py
 trl/trainer/ddpo_trainer.py
