@@ -11,13 +11,25 @@ config_param:
    code_path:
        azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml
    # the blob account information
-       path: jan/repos/dummy_job/dummy_job.zip # where the zipped source code is
+       path: jan/repos/emu_trl/emu_trl.zip # where the zipped source code is
    # you can add multiple key-value pairs to configure the folder mapping.
    # Locally, if the folder name is A, and you want A to be a blobfuse
    # folder in the AML side, you need to set the key as A_folder. For
    # example, if the local folder is datasets, and you want datasets to be a
    # blobfuse folder in AML running, then add a pair with the key being
    # datasets_folder.
+   pretrain_folder:
+       azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+       # after the source code is unzipped, this folder will be as $ROOT/models
+       path: jan/repos/emu_trl/pretrain
+   logs_folder:
+       azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+       # after the source code is unzipped, this folder will be as $ROOT/models
+       path: jan/repos/emu_trl/logs
+   save_folder:
+       azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+       # after the source code is unzipped, this folder will be as $ROOT/models
+       path: jan/repos/emu_trl/save
    # models_folder:
    #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
    #     # after the source code is unzipped, this folder will be as $ROOT/models
@@ -26,10 +38,10 @@ config_param:
    #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
    #     # after the source code is unzipped, this folder will be as $ROOT/models
    #     path: jan/repos/adversarial_diffusion/logs
-   # data_folder:
-   #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
-   #     # after the source code is unzipped, this folder will be as $ROOT/data
-   #     path: jan/repos/adversarial_diffusion/data
+   data_folder:
+       azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+       # after the source code is unzipped, this folder will be as $ROOT/data
+       path: jan/repos/emu_trl/data
    # ffhq_folder:
    #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
    #     # after the source code is unzipped, this folder will be as $ROOT/data
@@ -41,8 +53,8 @@ config_param:
 use_custom_docker: true
 # compute target should be the virtual cluster name if it is singularity
 # compute_target: Training
-# compute_target: A100-4GPU-80GB-west3
-compute_target: A100-8GPU-80GB
+compute_target: A100-4GPU-80GB-west3
+# compute_target: A100-8GPU-80GB
 # compute_target: vsn-sing-acv-wu2
 
 # the value of platform can be aml or itp or singularity.
@@ -67,7 +79,7 @@ use_cli_auth: True
 # distributed training, if it is false, you might need to spawn n extra
 # processes by yourself. It is recommended to set it as true (default)
 multi_process: True
-gpu_per_node: 8
+gpu_per_node: 4
 # set it as true if you'd like to submit the job as P type, which is
 # preemptible
 preemption_allowed: false
@@ -85,16 +97,10 @@ zip_options:
     - '-x'
     - '\*.git\*'
     - '-x'
-    - '\*taming-transformers/data/\*'
-    - '-x'
-    - '\*results\*'
-    - '-x'
-    - 'dataset/\*'
-    - '-x'
-    - 'models/\*'
-    - '-x'
     - 'data/\*'
     - '-x'
     - 'logs/\*'
     - '-x'
-    - 'ffhq/\*'
+    - 'save/\*'
+    - '-x'
+    - 'pretrain/\*'

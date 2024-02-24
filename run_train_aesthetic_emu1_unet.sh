@@ -1,5 +1,8 @@
 export NCCL_DEBUG=INFO
+export WANDB_API_KEY="cb10a6c8187e45acea4deb3db30a0db8535a010d"
+
 ACCELERATE_CONFIG='./accelerate_config_4gpu.yaml'
+pip install -e .
 # ACCELERATE_CONFIG='./accelerate_config_1gpu.yaml'
 accelerate  launch --config_file $ACCELERATE_CONFIG examples/scripts/ddpo_emu1.py \
     --num_epochs=400 \
