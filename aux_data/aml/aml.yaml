@@ -30,6 +30,10 @@ config_param:
        azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
        # after the source code is unzipped, this folder will be as $ROOT/models
        path: jan/repos/emu_trl/save
+   wandb_folder:
+       azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
+       # after the source code is unzipped, this folder will be as $ROOT/models
+       path: jan/repos/emu_trl/wandb
    # models_folder:
    #     azure_blob_config_file: ./aux_data/configs/vigblob_account.yaml # the blob account information
    #     # after the source code is unzipped, this folder will be as $ROOT/models
@@ -62,7 +66,7 @@ compute_target: A100-4GPU-80GB-west3
 #
 docker:
     # the custom docker. If use_custom_docker is False, this will be ignored
-    image: pkuanjie/ldm:0.2.1
+    image: pkuanjie/ddpo:0.1
     # image: pkuanjie/ldm:0.5
     'username': pkuanjie
     'password': Anjie930728
@@ -78,7 +82,7 @@ use_cli_auth: True
 # the node. otherwise, there will be only 1 process on each node. In
 # distributed training, if it is false, you might need to spawn n extra
 # processes by yourself. It is recommended to set it as true (default)
-multi_process: True
+multi_process: False
 gpu_per_node: 4
 # set it as true if you'd like to submit the job as P type, which is
 # preemptible
@@ -104,3 +108,5 @@ zip_options:
     - 'save/\*'
     - '-x'
     - 'pretrain/\*'
+    - '-x'
+    - 'wandb/\*'

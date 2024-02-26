@@ -39,12 +39,15 @@ from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
 
 from trl import DDPOConfig, DDPOEmu1LMMUNetTrainer, DefaultDDPOStableDiffusionPipeline, DefaultDDPOEmu1LMMUNetPipeline
 from trl.import_utils import is_npu_available, is_xpu_available
+import wandb
+
+wandb.login()
 
 
 @dataclass
 class ScriptArguments:
     pretrained_model: str = field(
-        default="/mnt/repos/emu_trl/emu1_ckpts/models--BAAI--Emu/snapshots/9d5face1ae9d8f5cd5c0ed891dc09e47833d06e1/pretrain/",
+        default="./pretrain/emu1_ckpts/models--BAAI--Emu/snapshots/9d5face1ae9d8f5cd5c0ed891dc09e47833d06e1/pretrain",
         metadata={"help": "the pretrained model to use"},
     )
     pretrained_revision: str = field(default="main", metadata={"help": "the pretrained model revision to use"})
@@ -212,14 +215,15 @@ if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
     args, ddpo_config = parser.parse_args_into_dataclasses()
     ddpo_config.project_kwargs = {
-        "logging_dir": "./logs_emu1",
+        "logging_dir": "./logs/logs_emu1_lmm_unet",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
-        "project_dir": "./save_emu1",
+        "project_dir": "./save/save_emu1_lmm_unet",
     }
+    ddpo_config.train_timestep_fraction = 0.1
 
     # remove the project directory if it exists so that it will not cause issues
-    os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")
+    # os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")
 
     pipeline = DefaultDDPOEmu1LMMUNetPipeline(args.pretrained_model, use_lora=args.use_lora)
 
