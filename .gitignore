@@ -3,3 +3,4 @@ pretrain
 save/
 logs/
 data/
+*.pyc
