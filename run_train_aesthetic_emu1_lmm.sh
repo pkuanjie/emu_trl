@@ -2,8 +2,9 @@ export NCCL_DEBUG=INFO
 export WANDB_API_KEY="cb10a6c8187e45acea4deb3db30a0db8535a010d"
 export WANDB__SERVICE_WAIT=300
 # ACCELERATE_CONFIG='./ds_config_1gpu.yaml'
+# ACCELERATE_CONFIG='./accelerate_config_1gpu.yaml'
 ACCELERATE_CONFIG='./accelerate_config_4gpu.yaml'
-MAIN_PROCESS_PORT=12349
+MAIN_PROCESS_PORT=12354
 pip install -e .
 # ACCELERATE_CONFIG='./accelerate_config_1gpu.yaml'
 # python examples/scripts/ddpo_emu1_lmm.py \
@@ -20,4 +21,7 @@ accelerate  launch --config_file $ACCELERATE_CONFIG --main_process_port $MAIN_PR
     --train_use_8bit_adam=true \
     --sample_guidance_scale=7.5 \
     --tracker_project_name="ddpo_emu1_lmm_aesthetic_score" \
-    --log_with="wandb"
+    --log_with="wandb" \
+    --train_timestep_fraction=0.1 \
+    --main_name='emu1_lmm' \
+    # --resume_from="./save/save_emu1_lmm_debug/checkpoints" \

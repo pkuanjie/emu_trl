@@ -23,11 +23,14 @@ import numpy as np
 import torch
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
-from diffusers.utils import convert_state_dict_to_diffusers
+from diffusers.utils import convert_state_dict_to_diffusers, convert_state_dict_to_peft
 
 from ..core import randn_tensor
 from ..import_utils import is_peft_available
 from .Emu1.models.pipeline import EmuGenerationPipeline
+from transformers.models.llama.modeling_llama import LlamaModel
+from peft.utils import set_peft_model_state_dict, get_peft_model_state_dict
+from pdb import set_trace as bp
 
 
 def print_trainable_parameters(model):
@@ -634,7 +637,7 @@ class DefaultDDPOEmu1LMMPipeline(DDPOEmu1LMMPipeline):
             state_dict = convert_state_dict_to_diffusers(
                 get_peft_model_state_dict(self.emu1_pipeline.emu_encoder.decoder.lm)
             )
-            self.emu1_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
+            self.emu1_pipeline.save_lora_weights(save_directory=output_dir, transformer_lora_layers=state_dict)
         self.emu1_pipeline.save_pretrained(output_dir)
 
     def get_trainable_layers(self):
@@ -655,6 +658,7 @@ class DefaultDDPOEmu1LMMPipeline(DDPOEmu1LMMPipeline):
             self.emu1_pipeline.emu_encoder.decoder.lm.model = get_peft_model(
                 self.emu1_pipeline.emu_encoder.decoder.lm.model, lora_config
             )
+
             # print_trainable_parameters(self.emu1_pipeline.emu_encoder.decoder.lm.model)
 
             # To avoid accelerate unscaling problems in FP16.
@@ -670,10 +674,18 @@ class DefaultDDPOEmu1LMMPipeline(DDPOEmu1LMMPipeline):
         if len(models) != 1:
             raise ValueError("Given how the trainable params were set, this should be of length 1")
         if self.use_lora and hasattr(models[0], "peft_config") and getattr(models[0], "peft_config", None) is not None:
-            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
-            self.emu1_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
-        elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
-            models[0].save_pretrained(os.path.join(output_dir, "unet"))
+            state_dict = get_peft_model_state_dict(models[0])
+            # print(state_dict.keys())
+            self.emu1_pipeline.write_lora_layers(
+                save_directory=output_dir,
+                state_dict=state_dict,
+                is_main_process=True,
+                weight_name=None,
+                save_function=None,
+                safe_serialization=True,
+            )
+        elif not self.use_lora and isinstance(models[0], LlamaModel):
+            models[0].save_pretrained(os.path.join(output_dir, "llama"))
         else:
             raise ValueError(f"Unknown model type {type(models[0])}")
 
@@ -684,10 +696,14 @@ class DefaultDDPOEmu1LMMPipeline(DDPOEmu1LMMPipeline):
             lora_state_dict, network_alphas = self.emu1_pipeline.lora_state_dict(
                 input_dir, weight_name="pytorch_lora_weights.safetensors"
             )
-            self.emu1_pipeline.load_lora_into_unet(lora_state_dict, network_alphas=network_alphas, unet=models[0])
+            # # self.emu1_pipeline.load_lora_into_unet(lora_state_dict, network_alphas=network_alphas, unet=models[0])
+            # self.emu1_pipeline.load_lora_into_transformer(
+            #     lora_state_dict, network_alphas=network_alphas, transformer=models[0]
+            # )
+            _ = set_peft_model_state_dict(models[0], lora_state_dict)
 
-        elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
-            load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
+        elif not self.use_lora and isinstance(models[0], LlamaModel):
+            load_model = LlamaModel.from_pretrained(input_dir, subfolder="llama")
             models[0].register_to_config(**load_model.config)
             models[0].load_state_dict(load_model.state_dict())
             del load_model

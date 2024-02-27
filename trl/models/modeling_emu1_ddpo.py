@@ -32,7 +32,19 @@ from .Emu1.models.pipeline import EmuGenerationPipeline
 
 if is_peft_available():
     from peft import LoraConfig
-    from peft.utils import get_peft_model_state_dict
+    from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
+
+
+def average_all_parameters(model):
+    """
+    Averages all the parameters of the model
+    """
+    sum_of_params = 0.0
+    count = 0
+    for param in model.parameters():
+        sum_of_params += param.cpu().to(torch.float32).data.numpy().mean()
+        count += 1
+    print("Average of all parameters:", sum_of_params / count)
 
 
 class AttrDict(dict):
@@ -641,13 +653,30 @@ class DefaultDDPOEmu1Pipeline(DDPOEmu1Pipeline):
     def save_checkpoint(self, models, weights, output_dir):
         if len(models) != 1:
             raise ValueError("Given how the trainable params were set, this should be of length 1")
+        # print("-" * 50)
+        # average_all_parameters(models[0])
         if self.use_lora and hasattr(models[0], "peft_config") and getattr(models[0], "peft_config", None) is not None:
-            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
-            self.emu1_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
+            state_dict = get_peft_model_state_dict(models[0])
+            self.emu1_pipeline.write_lora_layers(
+                save_directory=output_dir,
+                state_dict=state_dict,
+                is_main_process=True,
+                weight_name=None,
+                save_function=None,
+                safe_serialization=True,
+            )
         elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
             models[0].save_pretrained(os.path.join(output_dir, "unet"))
         else:
             raise ValueError(f"Unknown model type {type(models[0])}")
+
+        # if self.use_lora and hasattr(models[0], "peft_config") and getattr(models[0], "peft_config", None) is not None:
+        #     state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
+        #     self.emu1_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
+        # elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
+        #     models[0].save_pretrained(os.path.join(output_dir, "unet"))
+        # else:
+        #     raise ValueError(f"Unknown model type {type(models[0])}")
 
     def load_checkpoint(self, models, input_dir):
         if len(models) != 1:
@@ -656,7 +685,7 @@ class DefaultDDPOEmu1Pipeline(DDPOEmu1Pipeline):
             lora_state_dict, network_alphas = self.emu1_pipeline.lora_state_dict(
                 input_dir, weight_name="pytorch_lora_weights.safetensors"
             )
-            self.emu1_pipeline.load_lora_into_unet(lora_state_dict, network_alphas=network_alphas, unet=models[0])
+            _ = set_peft_model_state_dict(models[0], lora_state_dict)
 
         elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
             load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")

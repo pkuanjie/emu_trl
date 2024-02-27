@@ -203,7 +203,7 @@ class DDPOEmu1LMMUNetTrainer(BaseTrainer):
         self.sd_pipeline.emu_encoder.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
 
-        trainable_layers = self.sd_pipeline.get_trainable_layers()
+        lmm_param, unet_param = self.sd_pipeline.get_trainable_layers()
         # trainable_layers.to(self.accelerator.device, dtype=inference_dtype)
         # trainable_layers = [layer.to(self.accelerator.device, dtype=inference_dtype) for layer in trainable_layers]
         self.accelerator.register_save_state_pre_hook(self._save_model_hook)
@@ -238,10 +238,16 @@ class DDPOEmu1LMMUNetTrainer(BaseTrainer):
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
         if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
-            emu_encoder_and_unet = self.accelerator.prepare(trainable_layers)
-            self.trainable_layers = list(filter(lambda p: p.requires_grad, emu_encoder_and_unet))
+            lmm_param, unet_param = self.accelerator.prepare(lmm_param, unet_param)
+            # emu_encoder_and_unet = self.accelerator.prepare(trainable_layers)
+            self.trainable_layers = list(
+                filter(lambda p: p.requires_grad, list(lmm_param.parameters()) + list(unet_param.parameters()))
+                # filter(lambda p: p.requires_grad, emu_encoder_and_unet)
+            )
         else:
-            self.trainable_layers = self.accelerator.prepare(trainable_layers)
+            lmm_param, unet_param = self.accelerator.prepare(lmm_param, unet_param)
+            self.trainable_layers = list(lmm_param.parameters()) + list(unet_param.parameters())
+            # self.trainable_layers = self.accelerator.prepare(trainable_layers)
 
         if self.config.async_reward_computation:
             self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
@@ -259,7 +265,7 @@ class DDPOEmu1LMMUNetTrainer(BaseTrainer):
             self.first_epoch = int(config.resume_from.split("_")[-1]) + 1
         else:
             self.first_epoch = 0
-        del trainable_layers
+        del lmm_param, unet_param
         torch.cuda.empty_cache()
 
     def compute_rewards(self, prompt_image_pairs, is_async=False):
@@ -531,6 +537,7 @@ class DDPOEmu1LMMUNetTrainer(BaseTrainer):
         Returns:
             samples (List[Dict[str, torch.Tensor]]), prompt_image_pairs (List[List[Any]])
         """
+        max_token_length = 64
         samples = []
         prompt_image_pairs = []
         self.sd_pipeline.emu_encoder.eval()
@@ -542,10 +549,11 @@ class DDPOEmu1LMMUNetTrainer(BaseTrainer):
                 log_with_time(f"Generating samples: {s_idx}/{iterations}")
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
 
+            self.sd_pipeline.tokenizer.model_max_length = max_token_length
             prompt_output = self.sd_pipeline.tokenizer(prompts, padding="max_length", return_tensors="pt")
             prompt_ids = prompt_output.input_ids.to(self.accelerator.device)
             attention_mask = prompt_output.attention_mask.to(self.accelerator.device)
-            prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompts)
+            prompt_embeds = self.sd_pipeline.emu_encoder.generate_image(prompts, max_token_length=max_token_length)
 
             with self.autocast():
                 sd_output, unet_conditions = self.sd_pipeline(

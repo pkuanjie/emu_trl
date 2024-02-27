@@ -40,6 +40,7 @@ from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
 from trl import DDPOConfig, DDPOEmu1LMMUNetTrainer, DefaultDDPOStableDiffusionPipeline, DefaultDDPOEmu1LMMUNetPipeline
 from trl.import_utils import is_npu_available, is_xpu_available
 import wandb
+import datetime
 
 wandb.login()
 
@@ -49,6 +50,10 @@ class ScriptArguments:
     pretrained_model: str = field(
         default="./pretrain/emu1_ckpts/models--BAAI--Emu/snapshots/9d5face1ae9d8f5cd5c0ed891dc09e47833d06e1/pretrain",
         metadata={"help": "the pretrained model to use"},
+    )
+    main_name: str = field(
+        default="emu1_lmm_unet",
+        metadata={"help": "the name of all models and dirs"},
     )
     pretrained_revision: str = field(default="main", metadata={"help": "the pretrained model revision to use"})
     hf_hub_model_id: str = field(
@@ -214,13 +219,13 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
     args, ddpo_config = parser.parse_args_into_dataclasses()
+    time_str = "{date:%Y_%m_%d_%H_%M}".format(date=datetime.datetime.now())
     ddpo_config.project_kwargs = {
-        "logging_dir": "./logs/logs_emu1_lmm_unet",
+        "logging_dir": f"./logs/logs_{args.main_name}_{time_str}",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
-        "project_dir": "./save/save_emu1_lmm_unet",
+        "project_dir": f"./save/save_{args.main_name}_{time_str}",
     }
-    ddpo_config.train_timestep_fraction = 0.1
 
     # remove the project directory if it exists so that it will not cause issues
     # os.system(f"rm -rf {ddpo_config.project_kwargs['project_dir']}")
