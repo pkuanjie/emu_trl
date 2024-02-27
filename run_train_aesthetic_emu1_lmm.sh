@@ -4,7 +4,7 @@ export WANDB__SERVICE_WAIT=300
 # ACCELERATE_CONFIG='./ds_config_1gpu.yaml'
 # ACCELERATE_CONFIG='./accelerate_config_1gpu.yaml'
 ACCELERATE_CONFIG='./accelerate_config_4gpu.yaml'
-MAIN_PROCESS_PORT=12354
+MAIN_PROCESS_PORT=12394
 pip install -e .
 # ACCELERATE_CONFIG='./accelerate_config_1gpu.yaml'
 # python examples/scripts/ddpo_emu1_lmm.py \
