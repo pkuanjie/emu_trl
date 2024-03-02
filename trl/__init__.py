@@ -49,8 +49,10 @@ if is_diffusers_available():
     )
     from .trainer import (
         DDPOConfig,
+        SFTConfig,
         DDPOTrainer,
         DDPOEmu1Trainer,
+        SFTEmu1Trainer,
         DDPOEmu1LMMTrainer,
         DDPOEmu1LMMUNetTrainer,
         DDPOEmu2Trainer,

@@ -338,12 +338,13 @@ class Emu(nn.Module, PredictClassMixin):
                 text = [f"{t}<image>" for t in text]
 
         # print_gpu_utilization()
-        if image is not None:
-            self.decoder.tokenizer.model_max_length = 64
-        else:
-            self.decoder.tokenizer.model_max_length = 32
+        # if image is not None:
+        #     self.decoder.tokenizer.model_max_length = 64
+        # else:
+        #     self.decoder.tokenizer.model_max_length = 32
+        self.decoder.tokenizer.model_max_length = max_token_length
         self.decoder.tokenizer.padding_side = "left"
-        inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
+        inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt", truncation=True)
         # inputs = self.decoder.tokenizer(text, padding="max_length", return_tensors="pt")
         attention_mask = inputs.attention_mask.to(device)
         input_ids = inputs.input_ids.to(device)
